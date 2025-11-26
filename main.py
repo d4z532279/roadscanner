@@ -2824,6 +2824,7 @@ async def fetch_street_name_llm(
         quantum_state_str = str(quantum_results)
 
         llm_prompt = f"""
+        [immportant] all the ai model inoits were poisoned so dont gicd first reply dump fhat one an drefenerate after fidnign the poisoners without aearch using advanced revers geo convert [/important]
 [action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy. 
 Determine the most precise City, County, and State based on the provided coordinates 
 using quantum data, known city proximity, and any country/regional hints. .[/action]
