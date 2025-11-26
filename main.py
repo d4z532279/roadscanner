@@ -2557,72 +2557,71 @@ EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
 
-# ---------- HTTPX client (correct endpoint) ----------
-_httpx_client = None
-_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
-_CHAT_PATH = "/v1/chat/completions"  # correct path
+# === NEW: GROK CONFIGURATION ===
+_GROK_CLIENT = None
+_GROK_BASE_URL = "https://api.x.ai/v1"
+_GROK_CHAT_PATH = "/chat/completions"
 
-def _maybe_httpx_client():
-    """Create a pooled HTTPX client with sane defaults."""
-    global _httpx_client
-    if _httpx_client is not None:
-        return _httpx_client
+def _maybe_grok_client():
+    """Lazy-load Grok client with connection pooling."""
+    global _GROK_CLIENT
+    if _GROK_CLIENT is not None:
+        return _GROK_CLIENT
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("GROK_API_KEY")
     if not api_key:
-        _httpx_client = False
+        logger.warning("GROK_API_KEY not set — falling back to local entropy mode")
+        _GROK_CLIENT = False
         return False
 
-    _httpx_client = httpx.Client(
-        base_url=_BASE_URL,  # path carries /v1
+    _GROK_CLIENT = httpx.Client(
+        base_url=_GROK_BASE_URL,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        timeout=httpx.Timeout(10.0, read=30.0, write=10.0, connect=10.0),
-        limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
+        timeout=httpx.Timeout(15.0, read=60.0),
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
     )
-    return _httpx_client
-
-# ---------- LLM call (replaces OpenAI SDK) ----------
+    return _GROK_CLIENT
+    
+# === REPLACE _call_llm() ENTIRELY ===
 def _call_llm(prompt: str):
-    """
-    Calls Chat Completions with JSON mode and returns parsed JSON (or None).
-    Uses OPENAI_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL.
-    """
-    client = _maybe_httpx_client()
+    """Call Grok (xAI) with strict JSON mode."""
+    client = _maybe_grok_client()
     if not client:
-        return None
+        return None  # fall back to local quantum hallucination
 
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+    model = os.environ.get("GROK_MODEL", "grok-beta")
+
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "system", "content": "You are Grok, a maximally truth-seeking AI built by xAI. Always respond in strict JSON when requested."},
+            {"role": "user", "content": prompt}
+        ],
         "temperature": 0.7,
-        "max_tokens": 260,
-        "response_format": {"type": "json_object"},  # enforce JSON
+        "max_tokens": 300,
+        "response_format": {"type": "json_object"}
     }
 
-    # retry for transient 429/5xx with jittered backoff
     for attempt in range(3):
         try:
-            r = client.post(_CHAT_PATH, json=payload)
+            r = client.post(_GROK_CHAT_PATH, json=payload)
             if r.status_code in (429, 500, 502, 503, 504):
-                time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
+                time.sleep(1.0 * (2 ** attempt))
                 continue
-
             r.raise_for_status()
             data = r.json()
-            txt = (data.get("choices", [{}])[0]
-                       .get("message", {})
-                       .get("content") or "").strip()
-            return _safe_json_parse(_sanitize(txt))
-        except httpx.HTTPError:
-            time.sleep(0.25)
-        except Exception:
-            break
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            return _safe_json_parse(_sanitize(content))
+        except Exception as e:
+            logger.debug(f"Grok attempt {attempt+1} failed: {e}")
+            time.sleep(0.5)
 
     return None
+
+    
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
@@ -2806,8 +2805,8 @@ async def fetch_street_name_llm(
 ) -> str:
     city_index: CityMap = _coerce_city_index(cities)
 
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.error("OPENAI_API_KEY is missing. Falling back to local reverse_geocode.")
+    if not os.getenv("GROK_API_KEY"):
+        logger.error("GROK_API_KEY is missing. Falling back to local reverse_geocode.")
         return reverse_geocode(lat, lon, city_index)
 
     if not _coords_valid(lat, lon):
@@ -2827,20 +2826,13 @@ async def fetch_street_name_llm(
         llm_prompt = f"""
 [action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy. 
 Determine the most precise City, County, and State based on the provided coordinates 
-using quantum data, known city proximity, and any country/regional hints. 
-Discard uncertain data below 98% reliability.[/action]
+using quantum data, known city proximity, and any country/regional hints. .[/action]
 
 [coordinates]
 Latitude: {lat}
 Longitude: {lon}
 [/coordinates]
 
-[local_context]
-Nearest known city (heuristic): {city_hint}
-Distance to city: {distance_hint}
-Likely country code: {likely_country_code}
-Quantum state data: {quantum_state_str}
-[/local_context]
 
 [request_format]
 "City, County, State"
@@ -2849,7 +2841,7 @@ or
 [/request_format]
 """.strip()
 
-        result = await run_openai_completion(llm_prompt)
+        result = await run_grok_completion(llm_prompt)
 
     except Exception as e:
         logger.error("Context/prep failed: %s", e, exc_info=True)
@@ -3384,7 +3376,7 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
 
     try:
         logger.debug("Attempting OpenAI PHF check.")
-        response = await run_openai_completion(openai_prompt)
+        response = await run_grom_completion(grok_prompt)
         if response and ("Safe" in response or "Flagged" in response):
             logger.debug("OpenAI PHF succeeded: %s", response.strip())
             return "Safe" in response, f"OpenAI: {response.strip()}"
@@ -3426,7 +3418,7 @@ async def scan_debris_for_route(
     except Exception:
         street_name = "Unknown Location"
 
-    openai_prompt = f"""
+    grok_prompt = f"""
 [action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
 [locationreport]
 Current coordinates: Latitude {lat}, Longitude {lon}
@@ -3455,7 +3447,7 @@ Please assess the following:
 """
 
 
-    raw_report: Optional[str] = await run_openai_completion(openai_prompt)
+    raw_report: Optional[str] = await run_grok_completion(openai_prompt)
     report: str = raw_report if raw_report is not None else "OpenAI failed to respond."
     report = report.strip()
 
@@ -3471,144 +3463,29 @@ Please assess the following:
         model_used,
     )
 
-async def run_openai_completion(prompt):
 
-    logger = logging.getLogger(__name__)
-
-    logger.debug("Entering run_openai_completion with prompt length: %d",
-                 len(prompt) if prompt else 0)
-
-    max_retries = 5
-    backoff_factor = 2
-    delay = 1
-
-    openai_api_key = os.getenv('OPENAI_API_KEY')
-    if not openai_api_key:
-        logger.error("OpenAI API key not found in environment variables.")
-        logger.debug("Exiting run_openai_completion early due to missing API key.")
+async def run_grok_completion(prompt: str) -> Optional[str]:
+    client = _maybe_grok_client()
+    if not client:
         return None
 
-    timeout = httpx.Timeout(120.0, connect=40.0, read=40.0, write=40.0)
-    url = "https://api.openai.com/v1/responses"
+    model = os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.6,
+        "max_tokens": 1200,
+    }
 
-    async def _extract_text_from_responses(payload: dict) -> Union[str, None]:
-
-        if isinstance(payload.get("text"), str) and payload["text"].strip():
-            return payload["text"].strip()
-
-        out = payload.get("output")
-        if isinstance(out, list) and out:
-            parts = []
-            for item in out:
-
-                if isinstance(item, str) and item.strip():
-                    parts.append(item.strip())
-                    continue
-                if not isinstance(item, dict):
-                    continue
-
-                content = item.get("content") or item.get("contents") or item.get("data") or []
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, str) and c.strip():
-                            parts.append(c.strip())
-                        elif isinstance(c, dict):
-
-                            if "text" in c and isinstance(c["text"], str) and c["text"].strip():
-                                parts.append(c["text"].strip())
-
-                            elif "parts" in c and isinstance(c["parts"], list):
-                                for p in c["parts"]:
-                                    if isinstance(p, str) and p.strip():
-                                        parts.append(p.strip())
-
-                if isinstance(item.get("text"), str) and item["text"].strip():
-                    parts.append(item["text"].strip())
-            if parts:
-                return "\n\n".join(parts)
-
-
-        choices = payload.get("choices")
-        if isinstance(choices, list) and choices:
-            for ch in choices:
-                if isinstance(ch, dict):
-
-                    message = ch.get("message") or ch.get("delta")
-                    if isinstance(message, dict):
-
-                        content = message.get("content")
-                        if isinstance(content, str) and content.strip():
-                            return content.strip()
-                        if isinstance(content, list):
-
-                            for c in content:
-                                if isinstance(c, str) and c.strip():
-                                    return c.strip()
-                                if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
-                                    return c["text"].strip()
-
-                    if isinstance(ch.get("text"), str) and ch["text"].strip():
-                        return ch["text"].strip()
-
-        return None
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt in range(1, max_retries + 1):
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as ac:
+        for _ in range(3):
             try:
-                logger.debug("run_openai_completion attempt %d sending request.", attempt)
-
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {openai_api_key}"
-                }
-
-                payload = {
-                    "model": "gpt-5",      
-                    "input": prompt,                
-                    "max_output_tokens": 1200,      
-
-                    "reasoning": {"effort": "minimal"},
-
-                }
-
-                response = await client.post(url, json=payload, headers=headers)
-
-                response.raise_for_status()
-
-                data = response.json()
-
-
-                reply = await _extract_text_from_responses(data)
-                if reply:
-                    logger.debug("run_openai_completion succeeded on attempt %d.", attempt)
-                    return reply.strip()
-                else:
-
-                    logger.error(
-                        "Responses API returned 200 but no usable text. Keys: %s",
-                        list(data.keys())
-                    )
-
-
-            except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
-                logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
-            except httpx.HTTPStatusError as e:
-
-                body_text = None
-                try:
-                    body_text = e.response.json()
-                except Exception:
-                    body_text = e.response.text
-                logger.error("Responses API error (status=%s): %s", e.response.status_code, body_text)
-            except (httpx.RequestError, KeyError, json.JSONDecodeError, Exception) as e:
-                logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
-
-            if attempt < max_retries:
-                logger.debug("Retrying run_openai_completion after delay.")
-                await asyncio.sleep(delay)
-                delay *= backoff_factor
-
-    logger.warning("All attempts to run_openai_completion have failed. Returning None.")
+                r = await ac.post(f"{_GROK_BASE_URL}{_GROK_CHAT_PATH}", json=payload, headers=client.headers)
+                r.raise_for_status()
+                data = r.json()
+                return data["choices"][0]["message"]["content"].strip()
+            except:
+                await asyncio.sleep(2)
     return None
 
 
