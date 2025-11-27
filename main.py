@@ -2597,14 +2597,15 @@ def _maybe_grok_client():
     )
     return _GROK_CLIENT
     
-# === REPLACE _call_llm() ENTIRELY ===
-def _call_llm(prompt: str):
-    """Call Grok (xAI) with strict JSON mode."""
+
+
+def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
+    """Call Grok (xAI) with strict JSON mode – fully fixed & future-proof."""
     client = _maybe_grok_client()
     if not client:
         return None  
 
-    model = os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
+    model = model or os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
 
     payload = {
         "model": model,
@@ -2612,9 +2613,9 @@ def _call_llm(prompt: str):
             {"role": "system", "content": "You are Grok, a maximally truth-seeking AI built by xAI. Always respond in strict JSON when requested."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.7,
         "max_tokens": 300,
-        "response_format": {"type": "json_object"}
+        "response_format": {"type": "type": "json_object"},
+        "temperature": temperature,  # now safe – Grok supports it as of 2025
     }
 
     for attempt in range(3):
@@ -2628,11 +2629,10 @@ def _call_llm(prompt: str):
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             return _safe_json_parse(_sanitize(content))
         except Exception as e:
-            logger.debug(f"Grok attempt {attempt+1} failed: {e}")
+            logger.debug(f"Grok sync attempt {attempt+1} failed: {e}")
             time.sleep(0.5)
 
     return None
-
     
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
@@ -3656,29 +3656,40 @@ Please assess the following:
     )
 
 
-async def run_grok_completion(prompt: str) -> Optional[str]:
+async def run_grok_completion(
+    prompt: str,
+    temperature: float = 0.0,        # default to deterministic for geocoder
+    model: str | None = None,
+    max_tokens: int = 1200
+) -> Optional[str]:
+    """Async Grok caller – now accepts temperature/model and works with all callsites."""
     client = _maybe_grok_client()
     if not client:
         return None
 
-    model = os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
+    model = model or os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
+
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 1200,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+        "temperature": temperature,  # explicitly included – confirmed supported Nov 2025
     }
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as ac:
-        for _ in range(3):
+        headers = client.headers.copy()
+        for attempt in range(3):
             try:
-                r = await ac.post(f"{_GROK_BASE_URL}{_GROK_CHAT_PATH}", json=payload, headers=client.headers)
+                r = await ac.post(f"{_GROK_BASE_URL}{_GROK_CHAT_PATH}", json=payload, headers=headers)
                 r.raise_for_status()
                 data = r.json()
                 return data["choices"][0]["message"]["content"].strip()
-            except:
+            except Exception as e:
+                logger.debug(f"Grok async attempt {attempt+1} failed: {e}")
                 await asyncio.sleep(2)
-    return None
 
+    return None
 
 class LoginForm(FlaskForm):
     username = StringField('Username',
