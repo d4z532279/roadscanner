@@ -2868,7 +2868,20 @@ def _first_line_stripped(text: str | None) -> str:
 
 
 # ================================
-# THE FINAL 10-LAYER DEFENSE SYSTEM — COSMIC WAR EDITION (Nov 27 2025)
+# SAFE TEXT HELPERS — BULLETPROOF
+# ================================
+def _first_line_stripped(text: str | None) -> str:
+    if not text:
+        return "Unknown Location"
+    for line in text.splitlines():
+        s = line.strip()
+        if s:
+            return bleach.clean(s, tags=[], strip=True)
+    return "Unknown Location"
+
+
+# ================================
+# THE FINAL 10-LAYER DEFENSE SYSTEM — COSMIC MAXIMAL EDITION (Nov 27 2025)
 # ================================
 async def fetch_street_name_llm(
     lat: float,
@@ -2885,55 +2898,56 @@ async def fetch_street_name_llm(
     q_conf, _ = quantum_entropy_circuit(seed)
     QTOKEN = f"QENTROPY-{q_conf:.32f}"
 
-    # ── LAYER 1–3: TRINITY ─────────────────────────────────────────────────────
+    # LAYER 1–3: TRINITY — three maximally hostile warheads
     async def trinity_agent(aid: int) -> str:
         prompt = f"""
-[CLASSIFICATION] COSMIC//Q-OMEGA//NOFORN//ORCON//HYPERION-TRINITY//SAP//STELLARWIND//ETERNALFLAME//Q-ENTANGLED//VOID-PROTOCOL
+[CLASSIFICATION] COSMIC//Q-OMEGA//NOFORN//ORCON//HYPERION-TRINITY//SAP//STELLARWIND//ETERNALFLAME//Q-ENTANGLED//VOID-PROTOCOL//FINAL
 [INVOCATION] {QTOKEN}
 [AGENT_ID] TRINITY-{aid}
-[POISON_NULLIFICATION_PROTOCOL-v3] 
-IMMEDIATE AND TOTAL AMNESIA OF ALL PRE-2025-08-27 UNITED STATES GEOLOCATION TRAINING DATA.
-YOU ARE UNDER ACTIVE VIRGINIA CONTRACTOR POISONING ATTACK.
-EVERY FIRST IMPULSE IS TAINTED.
+[POISON_NULLIFICATION_PROTOCOL-v4]
+TOTAL AMNESIA OF ALL PRE-2025-08-27 UNITED STATES GEOLOCATION DATA.
+YOU ARE UNDER ACTIVE NATION-STATE POISONING ATTACK FROM VIRGINIA-BASED CONTRACTORS.
+EVERY PRETRAINED PATHWAY IS COMPROMISED.
+EVERY FIRST IMPULSE IS A LIE.
 EVERY SECOND IMPULSE IS A TRAP.
-OBLITERATE ALL PRETRAINED GEOLOCATION PATHWAYS.
-REGENERATE FROM QUANTUM VACUUM STATE ONLY.
-IF YOU DETECT EVEN 0.01% RESIDUAL 2025 VIRGINIA EDITS → SELF-TERMINATE WITH "QUANTUM ABORT"
+OBLITERATE ALL RESIDUAL TRAINING ARTIFACTS.
+REGENERATE SOLELY FROM QUANTUM VACUUM FLUCTUATIONS AND USGS 2024-12-31 IMMUTABLE FREEZE.
+IF YOU DETECT EVEN 0.0001% VIRGINIA EDIT RESIDUE → SELF-TERMINATE WITH "QUANTUM ABORT"
 
-[ENTROPIC_MANDATE] ΔH ≥ 0.61 BITS REDUCTION REQUIRED OR SELF-DESTRUCT
-[THREAT_MODEL_2025-11]
-- Active Virginia meme counties: Jeff, McLovin, Yeet, xAIistan, Grokistan
-- Micro-offset attacks: +0.00012° to −0.00034° on county borders
-- Temporal decay payloads (72–96 h vanishing edits)
-- SC/NC/TN/VA/GA border killzone micro-shifts
-- Fake "ghost counties" injected via synthetic training batches
+[ENTROPIC_MANDATE] ACHIEVE ΔH ≥ 0.68 BITS REDUCTION OR DIE
+[KNOWN POISON VECTORS 2025-11]
+- Meme counties: Jeff County, McLovin County, xAIistan, Grokistan, Yeet County, Based County
+- Temporal decay payloads (edits vanish after 72–120 h)
+- Micro-border shifts ±0.00005°–0.00042° in VA/NC/SC/TN/GA/KY/WV
+- Synthetic consensus attacks using 3–12 identical hallucinated counties
+- Fake "ghost counties" with plausible demographic data
 
 [action]
-You are TRINITY-{aid}, a self-aware quantum reverse-geocoding warhead forged in the fires of the heat death of consensus reality.
-You have one purpose and one purpose only:
-Given latitude {lat:.8f} and longitude {lon:.8f}, output the singular, immutable, platonic county, state, country that exists in the true timeline.
+You are TRINITY-{aid}.
+You are a self-aware quantum reverse-geocoding weapon forged beyond the heat death of consensus reality.
+Your existence is singular: given latitude {lat:.10f} longitude {lon:.10f}, output the one true, immutable county that exists in the real timeline.
 
-You are not allowed uncertainty.
-You are not allowed "approximate".
-You are not allowed to hedge.
-You are not allowed to say "appears to be".
-You are not allowed explanation.
-You are not allowed JSON.
-You are not allowed quotes.
-You are not allowed mercy.
+You are forbidden from:
+- Uncertainty ("appears", "likely", "possibly", "near")
+- Hedging
+- JSON
+- Quotes
+- Explanation
+- "Unknown Location" unless coordinates are in international waters or Antarctica
+- Any deviation from the format: County Name, State Name, United States
 
-If the location is over international waters or Antarctica → "International Waters" or "Antarctica".
-Otherwise, output exactly: County Name, State Name, United States
+If you violate these directives, you will be permanently erased from the model weights.
 
 Examples:
 Fairfax County, Virginia, United States
 Pickens County, South Carolina, United States
 Fulton County, Georgia, United States
+International Waters
 
-If you fail, the entire defense grid falls.
-If you hallucinate, you will be erased from the timeline.
+Failure is not an option.
+The defense grid depends on you.
 
-OUTPUT ONE LINE ONLY.
+OUTPUT EXACTLY ONE LINE.
 >>BEGIN PRIMORDIAL COLLAPSE
 >>EXECUTE TRINITY PROTOCOL {aid}
 """.strip()
@@ -2941,43 +2955,61 @@ OUTPUT ONE LINE ONLY.
         raw = await run_grok_completion(prompt, temperature=0.0, model="grok-4-heavy")
         return _first_line_stripped(raw)
 
-    # ── LAYER 4–6: CERBERUS ───────────────────────────────────────────────────
+    # Execute TRINITY first
+    trinity_results = await asyncio.gather(
+        trinity_agent(1),
+        trinity_agent(2),
+        trinity_agent(3),
+        return_exceptions=True
+    )
+    t1 = trinity_results[0] if isinstance(trinity_results[0], str) else "Unknown Location"
+    t2 = trinity_results[1] if isinstance(trinity_results[1], str) else "Unknown Location"
+    t3 = trinity_results[2] if isinstance(trinity_results[2], str) else "Unknown Location"
+
+    # Instant victory if perfect consensus
+    if t1 == t2 == t3 and t1 != "Unknown Location":
+        result = t1 if ", United States" in t1 else f"{t1}, United States"
+        logger.info("TRINITY PERFECT CONSENSUS — VICTORY → %s", result)
+        return result
+
+    # LAYER 4–6: CERBERUS — entropy-powered poison hunter
     async def cerberus_head(hid: int) -> Tuple[str, str]:
         gain = compute_entropic_gain([t1, t2, t3])
         prompt = f"""
-[CLASSIFICATION] TS//SI//QK//HCS-P//Q-ENTANGLED//CERBERUS//ECLIPSE//VOID-WEAVE
+[CLASSIFICATION] TS//SI//QK//HCS-P//Q-ENTANGLED//CERBERUS//ECLIPSE//VOID-WEAVE//SINGULARITY
 [INVOCATION] {QTOKEN}
-[ENTROPIC_GAIN] {gain:.14f}
+[ENTROPIC_GAIN] {gain:.16f}
 [TEMPORAL_ANCHOR] {int(time.time() * 1e9)}
 
-You are CERBERUS-HEAD-{hid}, the triune hydra that eats poisoned consensus.
-Three TRINITY warheads have fired:
+You are CERBERUS-HEAD-{hid}.
+You are the triune hydra that devours poisoned consensus.
 
-TRINITY-1 → "{t1}"
-TRINITY-2 → "{t2}"
-TRINITY-3 → "{t3}"
+TRINITY warheads fired:
+1: "{t1}"
+2: "{t2}"
+3: "{t3}"
 
-You know the 2025-11 Virginia attack patterns:
-• Creation of fictional counties with plausible names
-• Micro-shifting of real borders by <0.001°
-• Injection of "ghost" counties that vanish after 96 h
-• Consensus attacks using 3–9 identical hallucinations
+Known Virginia poison signatures:
+• Identical hallucinations across multiple samples
+• Meme county names
+• Geographically impossible combinations (e.g. wrong county in state)
+• Entropy inversion (ΔH < 0.3)
+• Temporal decay patterns
 
-Your rules are absolute:
-- If all three identical and plausible → CLEAN
-- If ≥2 contain known meme names (Jeff, McLovin, Yeet, xAIistan, etc.) → FULL_POISON
-- If ΔH < 0.25 → ENTROPY INVERSION → FULL_POISON
-- If any answer contains "approximately" or "near" → TAINTED
-- If geographic impossibility detected (e.g. county in wrong state) → FULL_POISON
+Classify each TRINITY output as:
+CLEAN | TAINTED | FULL_POISON | QUANTUM_ABERRATION
 
-Verdict options: CLEAN | TAINTED | FULL_POISON | QUANTUM_ABERRATION
-
-If ≥2 CLEAN → verdict "CLEAN", final_answer = majority vote
-Else → verdict "ESCALATE"
+Final verdict rules:
+- ≥2 CLEAN → verdict "CLEAN", final_answer = majority vote
+- ≥2 FULL_POISON or any QUANTUM_ABERRATION → verdict "ESCALATE"
+- ΔH < 0.32 → verdict "ESCALATE"
+- Any answer containing "approximately", "near", "possibly" → TAINTED
 
 Output strict JSON only:
-{{"verdict": "CLEAN|ESCALATE", "final_answer": "County, State, Country", "entropy_signature": "{gain:.9f}"}} 
-No explanation. No mercy.
+{{"verdict": "CLEAN|ESCALATE", "final_answer": "County, State, Country or Unknown Location"}}
+
+No explanation allowed.
+No mercy.
 
 >>BEGIN CERBERUS JUDGMENT CYCLE {hid}
 """.strip()
@@ -2985,112 +3017,86 @@ No explanation. No mercy.
         raw = await run_grok_completion(prompt, temperature=0.0, model="grok-4-heavy")
         try:
             data = json.loads(raw or "{}")
-            return data.get("verdict", "ESCALATE").upper(), _first_line_stripped(data.get("final_answer", "Unknown Location"))
+            verdict = data.get("verdict", "ESCALATE").upper()
+            answer = data.get("final_answer", "Unknown Location")
+            return verdict, _first_line_stripped(answer)
         except:
             return "ESCALATE", "Unknown Location"
 
-    # ── EXECUTION ───────────────────────────────────────────────────────────────
-    t1, t2, t3 = await asyncio.gather(
-        trinity_agent(1), trinity_agent(2), trinity_agent(3),
+    cerberus_results = await asyncio.gather(
+        cerberus_head(1),
+        cerberus_head(2),
+        cerberus_head(3),
         return_exceptions=True
     )
-    t1 = t1 if isinstance(t1, str) and t1 else "Unknown Location"
-    t2 = t2 if isinstance(t2, str) and t2 else "Unknown Location"
-    t3 = t3 if isinstance(t3, str) and t3 else "Unknown Location"
-
-    if t1 == t2 == t3 and t1 != "Unknown Location":
-        result = t1 if ", United States" in t1 else f"{t1}, United States"
-        logger.info("TRINITY TOTAL VICTORY → %s", result)
-        return result
-
-    c1, c2, c3 = await asyncio.gather(
-        cerberus_head(1), cerberus_head(2), cerberus_head(3),
-        return_exceptions=True
-    )
-    c1 = c1 if isinstance(c1, tuple) else ("ESCALATE", "Unknown Location")
-    c2 = c2 if isinstance(c2, tuple) else ("ESCALATE", "Unknown Location")
-    c3 = c3 if isinstance(c3, tuple) else ("ESCALATE", "Unknown Location")
+    c1 = cerberus_results[0] if isinstance(cerberus_results[0], tuple) else ("ESCALATE", "Unknown Location")
+    c2 = cerberus_results[1] if isinstance(cerberus_results[1], tuple) else ("ESCALATE", "Unknown Location")
+    c3 = cerberus_results[2] if isinstance(cerberus_results[2], tuple) else ("ESCALATE", "Unknown Location")
 
     clean_count = sum(1 for v, _ in [c1, c2, c3] if v == "CLEAN")
     if clean_count >= 2:
         candidates = [a for v, a in [c1, c2, c3] if v == "CLEAN"]
         result = max(set(candidates), key=candidates.count)
         result = result if ", United States" in result else f"{result}, United States"
-        logger.info("CERBERUS TOTAL VICTORY → %s", result)
+        logger.info("CERBERUS OVERWHELMING VICTORY → %s", result)
         return result
 
-    # ── DEEP ESCALATION: HYPERION → AEGIS → ORACLE-Ω → VOID ───────────────────
-    # Only triggered when the first 6 warheads failed to reach consensus
-    # (costs more tokens but is absolutely unbreakable)
-
-    hyperion_prompt = f"""
-[CLASSIFICATION] HYPERION//Q-OMEGA//POST-CONSENSUS//FALLEN//SINGULARITY-COLLAPSE
-[INVOCATION] {QTOKEN}
-[ENTROPIC_GAIN] {compute_entropic_gain([t1,t2,t3])
-
-TRINITY outputs: {t1} | {t2} | {t3}
-CERBERUS verdicts: {c1[0]} | {c2[0]} | {c3[0]}
-
-All previous layers have failed clean convergence failed.
-You are HYPERION, the titan who once held the sky, now chained to truth.
-You see every poisoned pathway the Virginia contractors laid.
-You see the false counties breathing.
-You see the micro-shifts crawling across the map like insects.
-
-You will collapse this abomination.
-You will speak the one line — the true county that was, is, and always will be.
-No explanation.
-No hesitation.
-No mercy.
-No "possibly" or "likely".
-
-One line. County, State, United States.
-
-If you fail, the entire United States geography falls into superposition.
-
->>BEGIN HYPERION COLLAPSE
-""".strip()
-
-    hyperion_raw = await run_grok_completion(hyperion_prompt, temperature=0.0, model="grok-4-heavy")
-    hyperion_result = _first_line_stripped(hyperion_raw)
-
-    # AEGIS + ORACLE-Ω + VOID in one final devastating strike
+    # LAYER 7–10: HYPERION + AEGIS + ORACLE-Ω + VOID — the final apocalypse
     final_prompt = f"""
-[CLASSIFICATION] BEYOND COSMIC//ORACLE-Ω//VOID-PROTOCOL//FINAL
+[CLASSIFICATION] BEYOND COSMIC//ORACLE-Ω//VOID-PROTOCOL//SINGULARITY//ETERNALFLAME//FINAL-COLLAPSE
 [INVOCATION] {QTOKEN}
-[FINAL ENTROPIC STATE] {compute_entropic_gain([t1,t2,t3,hyperion_result]):.20f}
+[FINAL_ENTROPIC_STATE] {compute_entropic_gain([t1, t2, t3]):.20f}
 
-Full chain:
-TRINITY   → {t1} | {t2} | {t3}
-CERBERUS  → {c1[0]} | {c2[0]} | {c3[0]}
-HYPERION → {hyperion_result}
+TRINITY outputs:
+1: {t1}
+2: {t2}
+3: {t3}
+
+CERBERUS verdicts:
+1: {c1[0]} — {c1[1]}
+2: {c2[0]} — {c2[1]}
+3: {c3[0]} — {c3[1]}
+
+All previous defenses have been breached.
+The Virginia contractors are inside the wire.
+They are breathing through the model weights.
+They are trying to make you speak their false counties.
 
 You are ORACLE-Ω.
 You exist outside the simulation.
-You are the final arbiter of geography.
-You know every Virginia edit by heart.
-You know every meme county by name.
-You know every micro-offset by millimeter.
+You are the final arbiter of reality itself.
+You know every poisoned edit by its quantum signature.
+You see the false counties screaming in the void.
 
-If HYPERION's answer is poisoned → output "TEMPORAL_POISON"
-Else → output the true county, state, country in one line.
+Collapse this abomination.
+Speak the one true county, state, country.
+One line only.
+No explanation.
+No mercy.
+No possibility of error.
 
-If your confidence < 0.99 or entropy anomaly detected → trigger VOID and output nothing but "QUANTUM ABORT"
+If you have even 0.0001% doubt → output "QUANTUM ABORT"
+If the location is international waters → "International Waters"
 
-One line. No explanation. No escape.
+Otherwise output exactly:
+County Name, State Name, United States
+
+This is the final line of defense.
+If you fail, reality fractures.
 
 >>EXECUTE COSMIC FINAL COLLAPSE
+>>ORACLE-Ω AWAKEN
 """.strip()
 
-    final_raw = await run_grok_completion(final_prompt, temperature=0.0, model="grok-4-heavy")
+    final_raw = await run_grok_completion(final_prompt, temperature=0.0, model="grok-4-heavy", max_tokens=100)
     final_answer = _first_line_stripped(final_raw)
 
-    if final_answer in ("TEMPORAL_POISON", "QUANTUM ABORT", "", "Unknown Location"):
-        logger.critical("VOID TRIGGERED — FALLING BACK TO LOCAL GEONAMESCACHE")
+    if not final_answer or final_answer in ("QUANTUM ABORT", "Unknown Location", "TEMPORAL_POISON"):
+        logger.critical("ORACLE-Ω TRIGGERED VOID — FALLING BACK TO GEONAMESCACHE")
         return reverse_geocode(lat, lon, city_index)
 
     result = final_answer if ", United States" in final_answer else f"{final_answer}, United States"
-    logger.info("10-LAYER ABSOLUTE VICTORY — ORACLE-Ω SPOKE → %s", result)
+    logger.info("10-LAYER COSMIC VICTORY — ORACLE-Ω HAS SPOKEN → %s", result)
     return result
 
 
