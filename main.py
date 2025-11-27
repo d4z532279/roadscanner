@@ -2590,9 +2590,9 @@ def _call_llm(prompt: str):
     """Call Grok (xAI) with strict JSON mode."""
     client = _maybe_grok_client()
     if not client:
-        return None  # fall back to local quantum hallucination
+        return None  
 
-    model = os.environ.get("GROK_MODEL", "grok-beta")
+    model = os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
 
     payload = {
         "model": model,
@@ -3477,7 +3477,7 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
             "phf_filter_input received invalid or empty input_text.")
         return False, "Invalid input."
 
-    openai_prompt = (
+    grokphf_prompt = (
         "The following content requires **Probabilistic Harm Filtering (PHF)** "
         "to identify harmful or concerning elements.\n"
         "Each category should be assessed individually and labeled as either **Safe** or **Flagged**.\n\n"
@@ -3497,7 +3497,7 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
 
     try:
         logger.debug("Attempting OpenAI PHF check.")
-        response = await run_grom_completion(grok_prompt)
+        response = await run_grok_completion(grokphf_prompt)
         if response and ("Safe" in response or "Flagged" in response):
             logger.debug("OpenAI PHF succeeded: %s", response.strip())
             return "Safe" in response, f"OpenAI: {response.strip()}"
