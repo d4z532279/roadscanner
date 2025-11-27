@@ -3075,7 +3075,7 @@ No explanation.
 No mercy.
 No possibility of error.
 
-If you have even 0.0001% doubt → output "QUANTUM ABORT"
+If you have even 0.01% doubt → output "QUANTUM ABORT"
 If the location is international waters → "International Waters"
 
 Otherwise output exactly:
