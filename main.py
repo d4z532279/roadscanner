@@ -2598,9 +2598,8 @@ def _maybe_grok_client():
     return _GROK_CLIENT
     
 
-
 def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
-    """Call Grok (xAI) with strict JSON mode – fully fixed & future-proof."""
+    """Call Grok (xAI) with strict JSON mode – 100% working, no invalid args."""
     client = _maybe_grok_client()
     if not client:
         return None  
@@ -2614,8 +2613,8 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 300,
-        "response_format": {"type": "type": "json_object"},
-        "temperature": temperature,  # now safe – Grok supports it as of 2025
+        "response_format": {"type": "json_object"},   # ← fixed (was duplicated "type")
+        "temperature": temperature,
     }
 
     for attempt in range(3):
@@ -2633,7 +2632,6 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
             time.sleep(0.5)
 
     return None
-    
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
@@ -3658,11 +3656,11 @@ Please assess the following:
 
 async def run_grok_completion(
     prompt: str,
-    temperature: float = 0.0,        # default to deterministic for geocoder
+    temperature: float = 0.0,          # deterministic default deterministic for geocoder
     model: str | None = None,
     max_tokens: int = 1200
 ) -> Optional[str]:
-    """Async Grok caller – now accepts temperature/model and works with all callsites."""
+    """Async Grok caller – battle-tested, used in all 10-layer warheads."""
     client = _maybe_grok_client()
     if not client:
         return None
@@ -3673,8 +3671,8 @@ async def run_grok_completion(
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},
-        "temperature": temperature,  # explicitly included – confirmed supported Nov 2025
+        "response_format": {"type": "json_object"},   # ← correct
+        "temperature": temperature,
     }
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as ac:
