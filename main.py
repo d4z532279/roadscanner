@@ -3639,7 +3639,7 @@ Please assess the following:
 """
 
 
-    raw_report: Optional[str] = await run_grok_completion(openai_prompt)
+    raw_report: Optional[str] = await run_grok_completion(grok_prompt)
     report: str = raw_report if raw_report is not None else "OpenAI failed to respond."
     report = report.strip()
 
@@ -3665,7 +3665,6 @@ async def run_grok_completion(prompt: str) -> Optional[str]:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.6,
         "max_tokens": 1200,
     }
 
