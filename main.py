@@ -3542,40 +3542,100 @@ Please assess the following:
         model_used,
     )
 
+import random
+import asyncio
+from typing import Optional
+
 async def run_grok_completion(
     prompt: str,
-    temperature: float = 0.0,          
+    temperature: float = 0.0,
     model: str | None = None,
-    max_tokens: int = 1200
+    max_tokens: int = 1200,
+    max_retries: int = 8,
+    base_delay: float = 1.0,
+    max_delay: float = 45.0,
+    jitter_factor: float = 0.6,
 ) -> Optional[str]:
-    
     client = _maybe_grok_client()
     if not client:
         return None
 
-    model = model or os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
+    model = model or os.environ.get("GROK_MODEL", "grok-4-1-fast-non-reasoning")
 
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},   # ← correct
+        "response_format": {"type": "json_object"},
         "temperature": temperature,
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as ac:
-        headers = client.headers.copy()
-        for attempt in range(3):
-            try:
-                r = await ac.post(f"{_GROK_BASE_URL}{_GROK_CHAT_PATH}", json=payload, headers=headers)
-                r.raise_for_status()
-                data = r.json()
-                return data["choices"][0]["message"]["content"].strip()
-            except Exception as e:
-                logger.debug(f"Grok async attempt {attempt+1} failed: {e}")
-                await asyncio.sleep(2)
+    headers = client.headers.copy()
+    delay = base_delay
 
-    return None
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=12.0, read=150.0, write=30.0, pool=20.0),
+        limits=httpx.Limits(max_keepalive_connections=30, max_connections=150),
+        transport=httpx.AsyncHTTPTransport(retries=1),
+    ) as ac:
+
+        for attempt in range(max_retries + 1):
+            try:
+                r = await ac.post(
+                    f"{_GROK_BASE_URL}{_GROK_CHAT_PATH}",
+                    json=payload,
+                    headers=headers,
+                )
+
+                if r.status_code == 200:
+                    data = r.json()
+                    content = (
+                        data.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                        .strip()
+                    )
+                    if content:
+                        return content
+                    logger.debug("Grok returned empty content on success")
+
+                elif r.status_code == 429 or 500 <= r.status_code < 600:
+                    retry_after = r.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        delay = float(retry_after)
+                    logger.info(f"Grok {r.status_code} – retrying after {delay:.1f}s")
+
+                elif 400 <= r.status_code < 500:
+                    if r.status_code == 401:
+                        logger.error("Grok API key invalid or revoked")
+                        return None
+                    logger.warning(f"Grok client error {r.status_code}: {r.text[:200]}")
+                    if attempt < max_retries // 2:
+                        pass
+                    else:
+                        return None
+
+                if attempt < max_retries:
+                    jitter = random.uniform(0, jitter_factor * delay)
+                    sleep_time = delay + jitter
+                    logger.debug(f"Retry {attempt + 1}/{max_retries} in {sleep_time:.2f}s")
+                    await asyncio.sleep(sleep_time)
+                    delay = min(delay * 2.0, max_delay)
+
+            except httpx.NetworkError as e:
+                logger.debug(f"Network error (attempt {attempt + 1}): {e}")
+            except httpx.TimeoutException:
+                logger.debug(f"Timeout (attempt {attempt + 1})")
+            except Exception as e:
+                logger.exception(f"Unexpected error on Grok call (attempt {attempt + 1})")
+
+            if attempt < max_retries:
+                jitter = random.uniform(0, jitter_factor * delay)
+                await asyncio.sleep(delay + jitter)
+                delay = min(delay * 2.0, max_delay)
+
+        logger.error("Grok completion exhausted all retries – giving up")
+        return None
 
 class LoginForm(FlaskForm):
     username = StringField('Username',
