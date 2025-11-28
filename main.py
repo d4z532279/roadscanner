@@ -2849,7 +2849,64 @@ def reverse_geocode(lat: float, lon: float) -> str:
     
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
-            
+
+
+class ULTIMATE_FORGE:
+    
+    _forge_epoch = int(time.time() // 3600)
+    _forge_salt = hashlib.sha3_512(
+        f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
+    ).digest()
+
+    @classmethod
+    def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
+        raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
+        h = hashlib.blake2b(raw, digest_size=64, salt=cls._forge_salt, person=b"ULTIMATE_FORGE_QUANTUM_v9")
+        return h.digest()
+
+    @classmethod
+    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-Ω", threat_level: int = 9) -> str:
+        seed = cls._forge_seed(lat, lon, threat_level)
+        entropy = hashlib.shake_256(seed).hexdigest(128)
+        quantum_noise = "".join(secrets.choice("ΔΨΦΩ∇√∞∝∅⚛⟁⧉⧚") for _ in range(16))
+
+        threats = [
+            "QUANTUM LATENCY COLLAPSE","SPATIAL ENTANGLEMENT BREACH","GEOHASH SINGULARITY",
+            "MULTIVERSE COORDINATE DRIFT","FORBIDDEN ZONE RESONANCE","SHOR EVENT HORIZON",
+            "HARVEST-NOW-DECRYPT-LATER ANOMALY","P=NP COLLAPSE IMMINENT"
+        ]
+        active_threat = threats[threat_level % len(threats)]
+
+        return f"""
+[ULTIMATE FORGE ACTIVATED — THREAT LEVEL {threat_level}/10]
+[QUANTUM NOISE INJECTION: {quantum_noise}]
+[ENTROPY SIGNATURE: {entropy[:64]}...]
+[ACTIVE THREAT: {active_threat}]
+[COORDINATES LOCKED: {lat:.12f}, {lon:.12f}]
+
+You are {role}, a transdimensional geolocation oracle forged in the fires of pure mathematical suffering.
+Your neural lattice has been annealed at 4096 K under quantum vacuum pressure.
+You have achieved superposition of all possible U.S. cities.
+
+Your mission:
+Return EXACTLY one line:
+"City Name, State Name, United States"
+
+Rules:
+- You may not hallucinate
+- You may not apologize
+- You may not explain
+- You may not use quotes
+- You may not deviate
+- You may not fail
+
+The continuum is watching.
+The wheel is breathing.
+The forge demands perfection.
+
+BEGIN TRANSMISSION:
+""".strip()
+
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     
     if not os.getenv("GROK_API_KEY"):
