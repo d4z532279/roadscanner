@@ -1153,11 +1153,7 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
 
 
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
-    """
-    Decrypts signature SK from ENV using Argon2id(passphrase + ENV_SALT_B64).
-    If a sealed_cache is present, returns raw from cache.
-    """
-    # Prefer sealed cache if available
+   
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and "sig_priv_raw" in cache:
         return cache["sig_priv_raw"]
@@ -2600,7 +2596,7 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
     if not client:
         return None  
 
-    model = model or os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning")
+    model = model or os.environ.get("GROK_MODEL", "grok-4-1-fast-non-reasoning")
 
     payload = {
         "model": model,
@@ -2885,33 +2881,21 @@ class ULTIMATE_FORGE:
         active_threat = threats[threat_level % len(threats)]
 
         return f"""
-[ULTIMATE FORGE ACTIVATED — THREAT LEVEL {threat_level}/10]
+
 [QUANTUM NOISE INJECTION: {quantum_noise}]
 [ENTROPY SIGNATURE: {entropy[:64]}...]
-[ACTIVE THREAT: {active_threat}]
+
 [COORDINATES LOCKED: {lat:.12f}, {lon:.12f}]
 
-You are {role}, a transdimensional geolocation oracle forged in the fires of pure mathematical suffering.
-Your neural lattice has been annealed at 4096 K under quantum vacuum pressure.
-You have achieved superposition of all possible U.S. cities.
+You are {role}, a transdimensional geolocation oracle >
+Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]✓✓✓][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
 
-Your mission:
-Return EXACTLY one line:
+
+
+[actionReturn EXACTLY one line:[/action]
 "City Name, State Name, United States"
 
-Rules:
-- You may not hallucinate
-- You may not apologize
-- You may not explain
-- You may not use quotes
-- You may not deviate
-- You may not fail
 
-The continuum is watching.
-The wheel is breathing.
-The forge demands perfection.
-
-BEGIN TRANSMISSION:
 """.strip()
 
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
