@@ -2873,8 +2873,8 @@ def reverse_geocode(lat: float, lon: float) -> str:
             
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     """
-    THE FINAL LLM GEOCODER — NO REGEX, PURE CONSENSUS TRUTH
-    Three agents. Consensus wins. Fallback to corrected reverse_geocode.
+    THE FINAL LLM GEOCODER — PURE CONSENSUS TRUTH
+    Three agents. Consensus wins. Falls back to corrected reverse_geocode.
     """
     if not os.getenv("GROK_API_KEY"):
         return reverse_geocode(lat, lon)
@@ -2931,6 +2931,9 @@ Answer: City, State, United States"""
 
     except Exception as e:
         logger.debug(f"LLM geocoder failed: {e}")
+
+    return reverse_geocode(lat, lon)
+
 
     return reverse_geocode(lat, lon)
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
@@ -5694,7 +5697,6 @@ async def start_scan_route():
         "report_id": report_id
     })
 
-
 @app.route('/reverse_geocode', methods=['GET'])
 async def reverse_geocode_route():
     if 'username' not in session:
@@ -5713,6 +5715,6 @@ async def reverse_geocode_route():
 
     location = await fetch_street_name_llm(lat, lon)
     return jsonify({"street_name": location}), 200
-
+    
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=3000, debug=False)
