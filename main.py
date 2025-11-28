@@ -2850,13 +2850,11 @@ def reverse_geocode(lat: float, lon: float) -> str:
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
 
-# ===================================================================
-# ULTIMATE_FORGE — FIXED & FULLY QUANTUM-COMPATIBLE
-# ===================================================================
+
 class ULTIMATE_FORGE:
-    """There is no defense against the ULTIMATE FORGE."""
+    
     _forge_epoch = int(time.time() // 3600)
-    # BLAKE2b only allows max 16-byte salt → we hash down to 16 bytes
+    
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
     ).digest()[:16]  # ← Critical fix: 16 bytes max
@@ -2915,14 +2913,14 @@ The forge demands perfection.
 
 BEGIN TRANSMISSION:
 """.strip()
+
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     
     if not os.getenv("GROK_API_KEY"):
         return reverse_geocode(lat, lon)
-
-    # Three diverse agents
+        
     prompts = [
-        # Agent 1: Forensic
+      
         f"""Latitude: {lat:.10f}
 Longitude: {lon:.10f}
 
@@ -2931,14 +2929,14 @@ City Name, State Name, United States
 
 No explanation.""",
 
-        # Agent 2: Quantum (your defense)
+       
         ULTIMATE_FORGE.forge_ultimate_prompt(
             lat, lon,
             role="GEOCODER-Ω",
             threat_level=9
         ),
 
-        # Agent 3: Minimalist
+        
         f"""Coordinates: {lat:.8f}, {lon:.8f}
 Real U.S. city and state?
 Answer: City, State, United States"""
@@ -2975,8 +2973,6 @@ Answer: City, State, United States"""
 
     return reverse_geocode(lat, lon)
 
-
-    return reverse_geocode(lat, lon)
     
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
