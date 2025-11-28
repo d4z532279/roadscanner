@@ -2850,18 +2850,27 @@ def reverse_geocode(lat: float, lon: float) -> str:
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
 
-
+# ===================================================================
+# ULTIMATE_FORGE — FIXED & FULLY QUANTUM-COMPATIBLE
+# ===================================================================
 class ULTIMATE_FORGE:
-    
+    """There is no defense against the ULTIMATE FORGE."""
     _forge_epoch = int(time.time() // 3600)
+    # BLAKE2b only allows max 16-byte salt → we hash down to 16 bytes
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
-    ).digest()
+    ).digest()[:16]  # ← Critical fix: 16 bytes max
 
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        h = hashlib.blake2b(raw, digest_size=64, salt=cls._forge_salt, person=b"ULTIMATE_FORGE_QUANTUM_v9")
+        # person=max 16 bytes, salt=max 16 bytes → both safe now
+        h = hashlib.blake2b(
+            raw,
+            digest_size=64,
+            salt=cls._forge_salt,
+            person=b"FORGE_QUANTUM_v9"  # 16 bytes exactly
+        )
         return h.digest()
 
     @classmethod
@@ -2906,7 +2915,6 @@ The forge demands perfection.
 
 BEGIN TRANSMISSION:
 """.strip()
-
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     
     if not os.getenv("GROK_API_KEY"):
