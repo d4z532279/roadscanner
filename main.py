@@ -100,18 +100,16 @@ try:
 except Exception:
     np = None
 
-# ——————————————————————————————
-# GEONAMESCACHE — CORRECTED STRUCTURE (FINAL 2025)
-# ——————————————————————————————
+
 import geonamescache
 
-# CORRECT API — TRIPLE-VERIFIED
-geonames = geonamescache.GeonamesCache()
-CITIES = geonames.get_cities()                    # id → city dict
-US_STATES_DICT = geonames.get_us_states()         # state_name → {abbrev: "TX", name: "Texas"}
-COUNTRIES = geonames.get_countries()              # code → country dict
 
-# Build proper reverse mapping: abbrev → full name
+geonames = geonamescache.GeonamesCache()
+CITIES = geonames.get_cities()                    
+US_STATES_DICT = geonames.get_us_states()         
+COUNTRIES = geonames.get_countries()              
+
+
 US_STATES_BY_ABBREV = {}
 for state_name, state_info in US_STATES_DICT.items():
     if isinstance(state_info, dict):
@@ -142,7 +140,7 @@ class _StartupOnceMiddleware:
 
     def __call__(self, environ, start_response):
         if not self._did:
-            with slf._lock:
+            with self._lock:
                 if not self._did:
                     try:
                         start_background_jobs_once()
@@ -152,7 +150,7 @@ class _StartupOnceMiddleware:
                         self._did = True
         return self.wsgi_app(environ, start_response)
 
-# install AFTER ProxyFix
+
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 app.wsgi_app = _StartupOnceMiddleware(app.wsgi_app)
 
@@ -752,13 +750,9 @@ class ColorSync:
         self._epoch = secrets.token_bytes(16)
 
     def sample(self, uid: str | None = None) -> dict:
-        """
-        If uid is provided → stable accent seed (UI personalization).
-        If uid is None → entropy-driven sample (crypto/entropy context).
-        Always returns unified dict shape.
-        """
+        
         if uid is not None:
-            # --- UI Accent Mode ---
+            
             seed = _stable_seed(uid + base64.b16encode(self._epoch[:4]).decode())
             rng = random.Random(seed)
 
@@ -786,7 +780,7 @@ class ColorSync:
                 "source": "accent",
             }
 
-        # --- Entropy / Crypto Mode ---
+        
         try:
             cpu, ram = get_cpu_ram_usage()
         except Exception:
@@ -843,7 +837,7 @@ class ColorSync:
 
     @staticmethod
     def _rgb_to_hsl(rgb_int: int) -> tuple[int, int, int]:
-        """Convert packed int (0xRRGGBB) to HSL triple (h, s, l)."""
+        
         r = (rgb_int >> 16 & 0xFF) / 255.0
         g = (rgb_int >> 8 & 0xFF) / 255.0
         b = (rgb_int & 0xFF) / 255.0
@@ -1062,21 +1056,18 @@ def _try(f: Callable[[], Any]) -> bool:
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
 def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
-    """
-    Populate hybrid (x25519 + optional PQ KEM) key handles from ENV,
-    falling back to the sealed cache when present. No files are touched.
-    """
+    
     cache = getattr(self, "_sealed_cache", None)
 
-    # ---- X25519 ----
+    
     x_pub_b   = _b64get(ENV_X25519_PUB_B64, required=False)
     x_privenc = _b64get(ENV_X25519_PRIV_ENC_B64, required=False)
 
     if x_pub_b:
-        # Env has the raw public key
+        
         self.x25519_pub = x_pub_b
     elif cache and cache.get("x25519_priv_raw"):
-        # Derive pub from sealed raw private (env didn't provide pub)
+        
         self.x25519_pub = (
             x25519.X25519PrivateKey
             .from_private_bytes(cache["x25519_priv_raw"])
@@ -1087,12 +1078,10 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     else:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
-    # If env doesn't carry the encrypted private, leave it empty;
-    # _decrypt_x25519_priv() will use the sealed cache path.
+    
     self._x25519_priv_enc = x_privenc or b""
 
-    # ---- PQ KEM (ML-KEM) ----
-    # Prefer ENV alg; fall back to sealed cache hint
+    
     self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
     if not self._pq_alg_name and cache and cache.get("kem_alg"):
         self._pq_alg_name = str(cache["kem_alg"]) or None
@@ -1100,17 +1089,17 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     pq_pub_b   = _b64get(ENV_PQ_PUB_B64, required=False)
     pq_privenc = _b64get(ENV_PQ_PRIV_ENC_B64, required=False)
 
-    # Store what we have (pub for encap; priv_enc for decap via env path)
+    
     self.pq_pub       = pq_pub_b or None
     self._pq_priv_enc = pq_privenc or None
 
-    # In strict mode we must have: alg + pub + (priv via env or sealed cache)
+    
     if STRICT_PQ2_ONLY:
         have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
         if not (self._pq_alg_name and self.pq_pub and have_priv):
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
-    # Log what we ended up with (helps debugging)
+    
     logger.debug(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
         "yes" if self.x25519_pub else "no",
@@ -1207,13 +1196,8 @@ def _oqs_sig_name() -> Optional[str]:
 
 
 def _km_load_or_create_signing(self: "KeyManager") -> None:
-    """
-    ENV-only:
-      - Reads PQ/Ed25519 signing keys from ENV, or creates+stores them in ENV if missing.
-      - Private key is AESGCM( Argon2id( passphrase + ENV_SALT_B64 ) ).
-    Requires bootstrap_env_keys() to have set ENV_SALT_B64 at minimum.
-    """
-    # Try to read from ENV first
+    
+    
     alg = os.getenv(ENV_SIG_ALG) or None
     pub = _b64get(ENV_SIG_PUB_B64, required=False)
     enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
@@ -1234,7 +1218,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
 
         try_pq = _oqs_sig_name() if oqs is not None else None
         if try_pq:
-            # Generate PQ signature (ML-DSA/Dilithium)
+            
             with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
                 pub_raw = s.generate_keypair()
                 sk_raw  = s.export_secret_key()
@@ -1265,7 +1249,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
             alg, pub, enc = "Ed25519", pub_raw, enc_raw
             logger.debug("Generated Ed25519 signature keypair into ENV (fallback).")
 
-    # Cache into the instance
+    
     self.sig_alg_name = alg
     self.sig_pub = pub
     self._sig_priv_enc = enc
@@ -1300,8 +1284,7 @@ def _km_verify(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool:
     except Exception:
         return False
 
-# === Bind KeyManager monkeypatched methods (do this once, at the end) ===
-# === Bind KeyManager monkeypatched methods (ENV-only) ===
+
 _KM = cast(Any, KeyManager)
 _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
@@ -1490,19 +1473,19 @@ class AuditTrail:
             logger.error(f"audit tail failed: {e}", exc_info=True)
         return out
 
-# 1) Generate any missing keys/salt/signing material into ENV (no files)
+
 bootstrap_env_keys(
     strict_pq2=STRICT_PQ2_ONLY,
     echo_exports=bool(int(os.getenv("QRS_BOOTSTRAP_SHOW","0")))
 )
 
-# 2) Proceed as usual, but everything now comes from ENV
+
 key_manager = KeyManager()
 encryption_key = key_manager.get_key()
 key_manager._sealed_cache = None
 key_manager.sealed_store = SealedStore(key_manager)
 
-# (Optional sealed cache in ENV – doesn't create files)
+
 if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
     key_manager._load_or_create_hybrid_keys()
     key_manager._load_or_create_signing()
@@ -1510,7 +1493,7 @@ if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=
 if key_manager.sealed_store.exists():
     key_manager.sealed_store.load_into_km()
 
-# Ensure runtime key handles are populated from ENV (no file paths)
+
 key_manager._load_or_create_hybrid_keys()
 key_manager._load_or_create_signing()
 
@@ -2186,12 +2169,12 @@ def init_app_once():
     with _init_lock:
         if _init_done:
             return
-        # whatever you previously had in before_first_request:
+        
         ensure_admin_from_env()
         enforce_admin_presence()
         _init_done = True
 
-# execute once when the worker imports your module
+
 with app.app_context():
     init_app_once()
 
@@ -2410,7 +2393,7 @@ gc = geonamescache.GeonamesCache()
 cities = gc.get_cities()
 
 
-# ---------- stable seed & identity ----------
+
 def _stable_seed(s: str) -> int:
     h = hashlib.sha256(s.encode("utf-8")).hexdigest()
     return int(h[:8], 16)
@@ -2439,7 +2422,7 @@ def _attach_cookie(resp):
     return resp
 
 
-# ---------- light JSON guard ----------
+
 def _safe_json_parse(txt: str):
     try:
         return json.loads(txt)
@@ -2461,11 +2444,7 @@ def _qml_ready() -> bool:
         return False
 
 def _quantum_features(cpu: float, ram: float):
-    """
-    Returns:
-      qs_dict: compact dict with entropy, peak state, etc.
-      qs_str : short string for prompt: {quantum_state}
-    """
+    
     if not _qml_ready():
         return None, "unavailable"
     try:
@@ -2489,7 +2468,7 @@ def _quantum_features(cpu: float, ram: float):
     except Exception:
         return None, "error"
 
-# ---------- system signals (inject quantum_state & quantum_state_sig) ----------
+
 def _system_signals(uid: str):
     cpu = psutil.cpu_percent(interval=0.05)
     ram = psutil.virtual_memory().percent
@@ -2510,7 +2489,7 @@ def _system_signals(uid: str):
         out["quantum_state_sig"] = qs_str        # "unavailable"/"error"
     return out
 
-# ---------- prompts: add {quantum_state} line ----------
+
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
     quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
@@ -2586,13 +2565,13 @@ EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
 
-# === NEW: GROK CONFIGURATION ===
+
 _GROK_CLIENT = None
 _GROK_BASE_URL = "https://api.x.ai/v1"
 _GROK_CHAT_PATH = "/chat/completions"
 
 def _maybe_grok_client():
-    """Lazy-load Grok client with connection pooling."""
+    
     global _GROK_CLIENT
     if _GROK_CLIENT is not None:
         return _GROK_CLIENT
@@ -2616,7 +2595,7 @@ def _maybe_grok_client():
     
 
 def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
-    """Call Grok (xAI) with strict JSON mode – 100% working, no invalid args."""
+  
     client = _maybe_grok_client()
     if not client:
         return None  
@@ -2649,7 +2628,7 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
             time.sleep(0.5)
 
     return None
-# ---------- APIs ----------
+
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
     uid = _user_id()
@@ -2867,15 +2846,12 @@ def reverse_geocode(lat: float, lon: float) -> str:
         country_name = COUNTRIES.get(country_code, {}).get("name", "Unknown Country")
         return f"{city_name}, {country_name}"
 
-    # Resolve full state name from abbrev (handles dict-of-dicts)
+    
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
             
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
-    """
-    THE FINAL LLM GEOCODER — PURE CONSENSUS TRUTH
-    Three agents. Consensus wins. Falls back to corrected reverse_geocode.
-    """
+    
     if not os.getenv("GROK_API_KEY"):
         return reverse_geocode(lat, lon)
 
@@ -2936,6 +2912,7 @@ Answer: City, State, United States"""
 
 
     return reverse_geocode(lat, lon)
+    
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
     lon_encrypted = encrypt_data(str(lon))
@@ -3177,7 +3154,6 @@ def register_user(username, password, invite_code=None):
 
     return True, "Registration successful."
 
-
 def check_rate_limit(user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -3219,14 +3195,12 @@ def check_rate_limit(user_id):
             db.commit()
             return True
 
-
 def generate_secure_invite_code(length=16, hmac_length=16):
     alphabet = string.ascii_uppercase + string.digits
     invite_code = ''.join(secrets.choice(alphabet) for _ in range(length))
     hmac_digest = hmac.new(SECRET_KEY, invite_code.encode(),
                            hashlib.sha256).hexdigest()[:hmac_length]
     return f"{invite_code}-{hmac_digest}"
-
 
 def validate_invite_code_format(invite_code_with_hmac,
                                 expected_length=33,
@@ -3334,7 +3308,6 @@ def save_hazard_report(lat, lon, street_name, vehicle_type, destination,
 
     return report_id
 
-
 def get_user_preferred_model(user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -3349,7 +3322,6 @@ def get_user_preferred_model(user_id):
                 return 'openai'
         else:
             return 'openai'
-
 
 def get_hazard_reports(user_id):
     with sqlite3.connect(DB_FILE) as db:
@@ -3379,7 +3351,6 @@ def get_hazard_reports(user_id):
             decrypted_reports.append(decrypted_report)
         return decrypted_reports
 
-
 def get_hazard_report_by_id(report_id, user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -3407,8 +3378,6 @@ def get_hazard_report_by_id(report_id, user_id):
             return decrypted_report
         else:
             return None
-
-
 
 async def phf_filter_input(input_text: str) -> tuple[bool, str]:
 
@@ -3528,14 +3497,13 @@ Please assess the following:
         model_used,
     )
 
-
 async def run_grok_completion(
     prompt: str,
-    temperature: float = 0.0,          # deterministic default deterministic for geocoder
+    temperature: float = 0.0,          
     model: str | None = None,
     max_tokens: int = 1200
 ) -> Optional[str]:
-    """Async Grok caller – battle-tested, used in all 10-layer warheads."""
+    
     client = _maybe_grok_client()
     if not client:
         return None
@@ -3623,7 +3591,7 @@ def index():
 
 @app.route('/home')
 def home():
-    # Optional: seed the user-specific accent so first paint is personalized.
+    
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
@@ -3668,7 +3636,7 @@ def home():
       overflow-x:hidden;
     }
 
-    /* Soft nebula */
+    
     .nebula{
       position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
       background:
@@ -3688,7 +3656,7 @@ def home():
     }
     .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
 
-    /* Hero card */
+    
     .hero{
       position:relative; border-radius:calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 96%, transparent);
@@ -3718,7 +3686,7 @@ def home():
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
     }
 
-    /* Wheel layout */
+    
     .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
     @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
 
@@ -3728,7 +3696,7 @@ def home():
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
 
-      /* 🔧 make sure the container has height so the canvas can size */
+      
       aspect-ratio: 1 / 1;
       min-height: clamp(300px, 42vw, 520px);
     }
@@ -3925,9 +3893,7 @@ def home():
           integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
 
   <script>
-  /* =====================
-     micro utils & theming
-  ====================== */
+  
   const $ = (s, el=document)=>el.querySelector(s);
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -3947,9 +3913,7 @@ def home():
     }catch(e){}
   })();
 
-  /* =====================
-     ensure wheel has height (CSS fallback for older engines)
-  ====================== */
+  
   (function ensureWheelSize(){
     const panel = document.getElementById('wheelPanel');
     if(!panel) return;
@@ -3963,9 +3927,7 @@ def home():
     fit();
   })();
 
-  /* =====================
-     parallax (subtle)
-  ====================== */
+  
   (function parallax(){
     const panel = $('#wheelPanel'); if(!panel) return;
     let rx=0, ry=0, vx=0, vy=0;
@@ -3985,9 +3947,7 @@ def home():
     panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
   })();
 
-  /* =====================
-     Risk-driven Breathing
-  ====================== */
+  
   class BreathEngine {
     constructor(){
       this.rateHz = 0.10;  // ≈6 bpm baseline
@@ -4025,9 +3985,7 @@ def home():
   const breath = new BreathEngine();
   (function loopBreath(){ breath.tick(); requestAnimationFrame(loopBreath); })();
 
-  /* =====================
-     Risk Wheel (2D canvas)
-  ====================== */
+  
   class RiskWheel {
     constructor(canvas){
       this.c = canvas; this.ctx = canvas.getContext('2d');
@@ -4070,11 +4028,11 @@ def home():
       ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
       ctx.lineWidth = (R-inner);
 
-      // track
+      
       ctx.strokeStyle='#ffffff16';
       ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
 
-      // fill
+      
       const p=clamp01(this.value), maxAng=p*Math.PI*2, segs=220;
       for(let i=0;i<segs;i++){
         const t0=i/segs; if(t0>=p) break;
@@ -4085,7 +4043,7 @@ def home():
         ctx.stroke();
       }
 
-      // specular sweep
+      
       const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
       const t = performance.now()/1000;
       const sweepAng = (t * sp) % (Math.PI*2);
@@ -4115,9 +4073,7 @@ def home():
     }
   }
 
-  /* =====================
-     Store + bindings
-  ====================== */
+  
   const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
   const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
@@ -4153,9 +4109,7 @@ def home():
     setHUD(j);
   }
 
-  /* =====================
-     controls & modes
-  ====================== */
+  
   function toggleSeg(m){
     current.mode=m;
     btnGuess.setAttribute('aria-pressed', m==='guess'); btnGuess.setAttribute('aria-selected', m==='guess');
@@ -4227,7 +4181,7 @@ def home():
     try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)}); return await r.json(); }catch(e){ return null; }
   }
 
-  // Optional SSE (throttled by applyReading to once per minute)
+  
   (function trySSE(){
     if(!('EventSource' in window)) return;
     try{
@@ -4237,7 +4191,7 @@ def home():
     }catch(e){}
   })();
 
-  // Boot
+ 
   toggleSeg('guess'); startAuto();
   </script>
 </body>
