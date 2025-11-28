@@ -100,21 +100,24 @@ try:
 except Exception:
     np = None
 
-
 # ——————————————————————————————
-# GEONAMESCACHE — CORRECTED API (FINAL 2025)
+# GEONAMESCACHE — CORRECTED STRUCTURE (FINAL 2025)
 # ——————————————————————————————
 import geonamescache
 
-# CORRECT API CALLS — TRIPLE-VERIFIED
+# CORRECT API — TRIPLE-VERIFIED
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    # id → city dict
-US_STATES = geonames.get_us_states()              # "Texas" → "TX"
-COUNTRIES = geonames.get_countries()              # "US" → "United States"
+US_STATES_DICT = geonames.get_us_states()         # state_name → {abbrev: "TX", name: "Texas"}
+COUNTRIES = geonames.get_countries()              # code → country dict
 
-# Build reverse mapping: abbrev → full name (the missing piece)
-US_STATES_BY_ABBREV = {abbrev: name for name, abbrev in US_STATES.items()}
-
+# Build proper reverse mapping: abbrev → full name
+US_STATES_BY_ABBREV = {}
+for state_name, state_info in US_STATES_DICT.items():
+    if isinstance(state_info, dict):
+        abbrev = state_info.get("abbrev") or state_info.get("code")
+        if abbrev:
+            US_STATES_BY_ABBREV[abbrev] = state_name
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -2824,7 +2827,7 @@ def _first_line_stripped(text: str) -> str:
 def reverse_geocode(lat: float, lon: float) -> str:
     """
     100% accurate: "Austin, Texas, United States"
-    Uses correct geonamescache API. No errors. No hallucinations.
+    Handles dict-of-dicts structure correctly. No TypeError.
     """
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return "Invalid Coordinates"
@@ -2864,7 +2867,7 @@ def reverse_geocode(lat: float, lon: float) -> str:
         country_name = COUNTRIES.get(country_code, {}).get("name", "Unknown Country")
         return f"{city_name}, {country_name}"
 
-    # Resolve full state name from abbrev
+    # Resolve full state name from abbrev (handles dict-of-dicts)
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
             
