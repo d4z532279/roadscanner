@@ -102,7 +102,16 @@ except Exception:
 
 
 import geonamescache
+import re,secrets,json,hashlib,sqlite3,bleach
+from datetime import datetime
+from flask import render_template_string,request,redirect,url_for,session,jsonify,flash,generate_csrf,Response,abort,make_response
+from flask_wtf import FlaskForm
+from wtforms import StringField,TextAreaField,SelectField,SubmitField
+from wtforms.validators import DataRequired,Length
+from bleach.sanitizer import Cleaner
 
+_SLUG_RE=re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+cleaner=Cleaner(tags=['h1','h2','h3','h4','h5','h6','p','br','strong','em','blockquote','ul','ol','li','a','img','figure','figcaption','pre','code','table','thead','tbody','tr','th','td','hr','div','span','section','article','header','footer','aside','time','del','ins','mark','small','sub','sup','details','summary'],attributes={'*':['class','id','title','itemscope','itemtype','itemprop'],'a':['href','rel','name'],'img':['src','alt','width','height','loading','decoding','srcset','sizes'],'time':['datetime']},protocols=['http','https','mailto','data'],strip=False)
 
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
@@ -195,7 +204,7 @@ if 'parse_safe_float' not in globals():
             raise ValueError("Non-finite float not allowed")
         return f
 
-# === ENV names for key-only-in-env mode ===
+
 ENV_SALT_B64              = "QRS_SALT_B64"             # base64 salt for KDF (Scrypt/Argon2)
 ENV_X25519_PUB_B64        = "QRS_X25519_PUB_B64"
 ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  # AESGCM(nonce|ct) b64
@@ -207,7 +216,7 @@ ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
 ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     # AESGCM(nonce|ct) b64
 ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env) b64
 
-# Small b64 helpers (env <-> bytes)
+
 def _b64set(name: str, raw: bytes) -> None:
     os.environ[name] = base64.b64encode(raw).decode("utf-8")
 
@@ -596,7 +605,7 @@ class KeyManager:
     sig_pub: Optional[bytes] = None
     _sig_priv_enc: Optional[bytes] = None
     sealed_store: Optional["SealedStore"] = None
-    # note: no on-disk dirs/paths anymore
+    
 
     def _oqs_kem_name(self) -> Optional[str]: ...
     def _load_or_create_hybrid_keys(self) -> None: ...
@@ -1125,16 +1134,13 @@ def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
     return x25519.X25519PrivateKey.from_private_bytes(raw)
 
 def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
-    """
-    Return the raw ML-KEM private key bytes suitable for oqs decapsulation.
-    Prefers sealed cache; falls back to ENV-encrypted key if present.
-    """
-    # Prefer sealed cache (already raw)
+    
+    
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
 
-    # Otherwise try the env-encrypted private key
+    
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1199,7 +1205,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
     enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
 
     if not (alg and pub and enc):
-        # Need to generate keys and place into ENV
+        
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
             raise RuntimeError(f"{self.passphrase_env_var} not set")
@@ -1215,7 +1221,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         try_pq = _oqs_sig_name() if oqs is not None else None
         if try_pq:
             
-            with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
+            with oqs.Signature(try_pq) as s:  
                 pub_raw = s.generate_keypair()
                 sk_raw  = s.export_secret_key()
             n = secrets.token_bytes(12)
@@ -1228,7 +1234,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         else:
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: ML-DSA signature required, but oqs unavailable.")
-            # Ed25519 fallback
+            
             kp  = ed25519.Ed25519PrivateKey.generate()
             pub_raw = kp.public_key().public_bytes(
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
@@ -1286,8 +1292,8 @@ _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
 _KM._decrypt_x25519_priv        = _km_decrypt_x25519_priv
 _KM._decrypt_pq_priv            = _km_decrypt_pq_priv
-_KM._load_or_create_signing     = _km_load_or_create_signing   # <-- ENV version
-_KM._decrypt_sig_priv           = _km_decrypt_sig_priv         # <-- ENV version
+_KM._load_or_create_signing     = _km_load_or_create_signing  
+_KM._decrypt_sig_priv           = _km_decrypt_sig_priv        
 _KM.sign_blob                   = _km_sign
 _KM.verify_blob                 = _km_verify
 
@@ -1858,109 +1864,639 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
 registration_enabled = True
 
 try:
-    quantum_hazard_scan  # type: ignore[name-defined]
+    quantum_hazard_scan  
 except NameError:
-    quantum_hazard_scan = None  # fallback when module not present
+    quantum_hazard_scan = None 
 
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
+    with sqlite3.connect(DB_FILE, timeout=30.0, isolation_level=None) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=NORMAL")
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("PRAGMA secure_delete=ON")
+        db.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        db.execute("PRAGMA temp_store=MEMORY")
+        db.execute("PRAGMA mmap_size=134217728")
+        db.execute("PRAGMA cache_size=-64000")
+        cur = db.cursor()
 
-    with sqlite3.connect(DB_FILE) as db:
-        cursor = db.cursor()
+        # Users
+        cur.execute("""CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password TEXT NOT NULL,
+            is_admin BOOLEAN DEFAULT 0,
+            preferred_model TEXT DEFAULT 'openai',
+            created_at TEXT DEFAULT (datetime('now')),
+            last_login TEXT,
+            failed_logins INTEGER DEFAULT 0,
+            locked_until TEXT,
+            totp_secret TEXT,
+            backup_codes TEXT,
+            CONSTRAINT valid_username CHECK(username=trim(username) AND length(username)>=3)
+        )""")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                is_admin BOOLEAN DEFAULT 0,
-                preferred_model TEXT DEFAULT 'openai'
-            )
-        """)
+        # Hazard reports (encrypted fields)
+        cur.execute("""CREATE TABLE IF NOT EXISTS hazard_reports(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            latitude TEXT,
+            longitude TEXT,
+            street_name TEXT,
+            vehicle_type TEXT,
+            destination TEXT,
+            result TEXT,
+            cpu_usage TEXT,
+            ram_usage TEXT,
+            quantum_results TEXT,
+            user_id INTEGER NOT NULL,
+            timestamp TEXT DEFAULT (datetime('now')),
+            risk_level TEXT,
+            model_used TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            quantum_entropy REAL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS hazard_reports (
-                id INTEGER PRIMARY KEY,
-                latitude TEXT,
-                longitude TEXT,
-                street_name TEXT,
-                vehicle_type TEXT,
-                destination TEXT,
-                result TEXT,
-                cpu_usage TEXT,
-                ram_usage TEXT,
-                quantum_results TEXT,
-                user_id INTEGER,
-                timestamp TEXT,
-                risk_level TEXT,
-                model_used TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
+        # Blog posts — fully PQ2 signed & encrypted
+        cur.execute("""CREATE TABLE IF NOT EXISTS blog_posts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL UNIQUE,
+            title_enc TEXT NOT NULL,
+            content_enc TEXT NOT NULL,
+            summary_enc TEXT,
+            tags_enc TEXT,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published','archived')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            author_id INTEGER NOT NULL,
+            sig_alg TEXT,
+            sig_pub_fp8 TEXT,
+            sig_val BLOB,
+            view_count INTEGER DEFAULT 0,
+            reading_time_min INTEGER,
+            version INTEGER DEFAULT 1,
+            canonical_slug TEXT,
+            FOREIGN KEY(author_id) REFERENCES users(id) ON DELETE CASCADE,
+            CONSTRAINT valid_slug CHECK(slug=lower(slug) AND slug REGEXP '^[a-z0-9]+(-[a-z0-9]+)*$')
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_status_created ON blog_posts(status,created_at DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_updated ON blog_posts(updated_at DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_slug ON blog_posts(slug)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_author ON blog_posts(author_id)")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
+        # Tags (materialized for ultra-fast tag clouds & archives)
+        cur.execute("""CREATE TABLE IF NOT EXISTS blog_tags(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            post_count INTEGER DEFAULT 0,
+            first_used TEXT,
+            last_used TEXT
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_tags_count ON blog_tags(post_count DESC)")
 
-        cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)",
-                           ('registration_enabled', '1'))
+        cur.execute("""CREATE TABLE IF NOT EXISTS blog_post_tags(
+            post_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            PRIMARY KEY(post_id,tag_id),
+            FOREIGN KEY(post_id) REFERENCES blog_posts(id) ON DELETE CASCADE,
+            FOREIGN KEY(tag_id) REFERENCES blog_tags(id) ON DELETE CASCADE
+        )""")
 
-        cursor.execute("PRAGMA table_info(hazard_reports)")
-        existing = {row[1] for row in cursor.fetchall()}
-        alter_map = {
-            "latitude":       "ALTER TABLE hazard_reports ADD COLUMN latitude TEXT",
-            "longitude":      "ALTER TABLE hazard_reports ADD COLUMN longitude TEXT",
-            "street_name":    "ALTER TABLE hazard_reports ADD COLUMN street_name TEXT",
-            "vehicle_type":   "ALTER TABLE hazard_reports ADD COLUMN vehicle_type TEXT",
-            "destination":    "ALTER TABLE hazard_reports ADD COLUMN destination TEXT",
-            "result":         "ALTER TABLE hazard_reports ADD COLUMN result TEXT",
-            "cpu_usage":      "ALTER TABLE hazard_reports ADD COLUMN cpu_usage TEXT",
-            "ram_usage":      "ALTER TABLE hazard_reports ADD COLUMN ram_usage TEXT",
-            "quantum_results":"ALTER TABLE hazard_reports ADD COLUMN quantum_results TEXT",
-            "risk_level":     "ALTER TABLE hazard_reports ADD COLUMN risk_level TEXT",
-            "model_used":     "ALTER TABLE hazard_reports ADD COLUMN model_used TEXT",
-        }
-        for col, alter_sql in alter_map.items():
-            if col not in existing:
-                cursor.execute(alter_sql)
+        # Config & feature flags
+        cur.execute("""CREATE TABLE IF NOT EXISTS config(
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now')),
+            updated_by INTEGER,
+            FOREIGN KEY(updated_by) REFERENCES users(id)
+        )""")
+        for k,v in {
+            "registration_enabled":"1",
+            "site_name":"QRS+ Quantum Scanner",
+            "site_description":"Post-quantum encrypted hazard & research platform",
+            "default_theme":"dark",
+            "maintenance_mode":"0",
+            "blog_comments_enabled":"0",
+            "analytics_enabled":"0"
+        }.items():
+            cur.execute("INSERT OR IGNORE INTO config(key,value)VALUES(?,?)",(k,v))
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS rate_limits (
-                user_id INTEGER,
-                request_count INTEGER DEFAULT 0,
-                last_request_time TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
+        # Rate limiting
+        cur.execute("""CREATE TABLE IF NOT EXISTS rate_limits(
+            user_id INTEGER PRIMARY KEY,
+            request_count INTEGER DEFAULT 0,
+            window_start TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS invite_codes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT UNIQUE NOT NULL,
-                is_used BOOLEAN DEFAULT 0
-            )
-        """)
+        # Invite codes (HMAC-protected)
+        cur.execute("""CREATE TABLE IF NOT EXISTS invite_codes(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            created_at TEXT DEFAULT (datetime('now')),
+            created_by INTEGER,
+            used_at TEXT,
+            used_by INTEGER,
+            is_used BOOLEAN DEFAULT 0,
+            FOREIGN KEY(created_by) REFERENCES users(id),
+            FOREIGN KEY(used_by) REFERENCES users(id)
+        )""")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS entropy_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pass_num INTEGER NOT NULL,
-                log TEXT NOT NULL,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # Entropy & quantum logs
+        cur.execute("""CREATE TABLE IF NOT EXISTS entropy_logs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pass_num INTEGER NOT NULL,
+            log TEXT NOT NULL,
+            source TEXT,
+            timestamp TEXT DEFAULT (datetime('now'))
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_entropy_time ON entropy_logs(timestamp DESC)")
 
+        # Sessions (server-side tracking for revocation)
+        cur.execute("""CREATE TABLE IF NOT EXISTS user_sessions(
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_seen TEXT DEFAULT (datetime('now')),
+            ip_address TEXT,
+            user_agent TEXT,
+            revoked BOOLEAN DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+
+        # Audit trail (append-only, signed)
+        cur.execute("""CREATE TABLE IF NOT EXISTS audit_log(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT DEFAULT (datetime('now')),
+            actor TEXT NOT NULL,
+            actor_id INTEGER,
+            event TEXT NOT NULL,
+            target TEXT,
+            target_id INTEGER,
+            data TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            signature BLOB,
+            prev_hash TEXT
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(timestamp DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor)")
+
+        # Search index (full-text)
+        cur.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS blog_fts USING fts5(
+            title, content, summary, tags, slug,
+            content='blog_posts',
+            content_rowid='id',
+            tokenize='unicode61'
+        )""")
+
+        # Triggers: auto-update timestamps
+        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_update_time
+            AFTER UPDATE ON blog_posts
+            FOR EACH ROW
+            BEGIN
+                UPDATE blog_posts SET updated_at=datetime('now') WHERE id=OLD.id;
+            END""")
+
+        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_fts_insert
+            AFTER INSERT ON blog_posts
+            BEGIN
+                INSERT INTO blog_fts(rowid,title,content,summary,tags,slug)
+                VALUES(new.id,
+                    blog_decrypt(new.title_enc),
+                    blog_decrypt(new.content_enc),
+                    blog_decrypt(new.summary_enc),
+                    blog_decrypt(new.tags_enc),
+                    new.slug);
+            END""")
+
+        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_fts_update
+            AFTER UPDATE ON blog_posts
+            BEGIN
+                INSERT INTO blog_fts(blog_fts,rowid,title,content,summary,tags,slug)
+                VALUES('delete',old.id,blog_decrypt(old.title_enc),blog_decrypt(old.content_enc),blog_decrypt(old.summary_enc),blog_decrypt(old.tags_enc),old.slug);
+                INSERT INTO blog_fts(rowid,title,content,summary,tags,slug)
+                VALUES(new.id,
+                    blog_decrypt(new.title_enc),
+                    blog_decrypt(new.content_enc),
+                    blog_decrypt(new.summary_enc),
+                    blog_decrypt(new.tags_enc),
+                    new.slug);
+            END""")
+
+        # Final vacuum & integrity check
+        db.execute("PRAGMA optimize")
+        db.execute("PRAGMA integrity_check")
+        db.execute("VACUUM")
         db.commit()
 
-    print("Database tables created and verified successfully.")
+    print("Advanced quantum-hardened database schema initialized (v9).")
+    
+def _linkify(attrs,new):
+    if not new:return attrs
+    rel=set((attrs.get((None,'rel'),'')or'').split())
+    rel.update({'nofollow','noopener','noreferrer'})
+    attrs[(None,'rel')]=' '.join(sorted(rel))
+    attrs[(None,'target')]='_blank'
+    return attrs
 
+def sanitize_html(h):h=h or"";h=cleaner.clean(h);return bleach.linkify(h,callbacks=[_linkify])
+def sanitize_text(s,m):s=bleach.clean(s or"",tags=[],attributes={},strip=True);s=re.sub(r'\s+',' ',s).strip();return s[:m]
+def sanitize_tags_csv(r,m=50):p=[sanitize_text(x,40)for x in(r or"").split(",")];p=[x for x in p if x];return",".join(p[:m])[:500]
+def reading_time(h):return max(1,round(len(re.findall(r'\w+',h))/225))
 
+def _blog_ctx(f,r=None):return{"domain":"blog","field":f,"rid":int(r or 0)}
+def blog_encrypt(f,p,r=None):return encrypt_data(p or"",ctx=_blog_ctx(f,r))
+def blog_decrypt(c):return""if not c else(decrypt_data(c)or"")
+
+def _canon_json(o):return json.dumps(o,separators=(",",":"),sort_keys=True).encode("utf-8")
+def _fp8(d):return hashlib.blake2s(d or b"",digest_size=8).hexdigest()
+def _post_sig_payload(p):return _canon_json({"v":"blog2","slug":p["slug"],"title":p["title"],"summary":p["summary"],"content":p["content"],"tags":p["tags"],"status":p["status"],"created_at":p["created_at"],"updated_at":p["updated_at"],"author_id":p["author_id"]})
+def _sign_post(p):payload=_post_sig_payload(p);alg=key_manager.sig_alg_name or"Ed25519";sig=key_manager.sign_blob(payload);pub=getattr(key_manager,"sig_pub",None)or b"";return alg,_fp8(pub),sig
+def _verify_post(p):payload=_post_sig_payload(p);pub=getattr(key_manager,"sig_pub",None)or b"";return pub and _fp8(pub)==p["sig_pub_fp8"]and key_manager.verify_blob(pub,p["sig_val"],payload)
+
+def _require_admin():return redirect(url_for('dashboard'))if not session.get('is_admin')else None
+
+def get_published_posts(page=1,per_page=12,tag=None):
+    offset=(page-1)*per_page
+    with sqlite3.connect(DB_FILE)as db:
+        cur=db.cursor()
+        if tag:cur.execute("SELECT id,slug,title_enc,summary_enc,tags_enc,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE status='published' AND tags_enc LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",(f"%{tag}%",per_page,offset))
+        else:cur.execute("SELECT id,slug,title_enc,summary_enc,tags_enc,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE status='published' ORDER BY created_at DESC LIMIT ? OFFSET ?",(per_page,offset))
+        rows=cur.fetchall()
+        cur.execute("SELECT COUNT(*)FROM blog_posts WHERE status='published'"+(" AND tags_enc LIKE ?"if tag else""),(f"%{tag}%",)if tag else())
+        total=cur.fetchone()[0]
+    posts=[]
+    for r in rows:
+        post={"id":r[0],"slug":r[1],"title":blog_decrypt(r[2]),"summary":blog_decrypt(r[3]),"tags":[t.strip()for t in blog_decrypt(r[4]).split(",")if t.strip()],"created_at":r[5],"updated_at":r[6],"author_id":r[7],"sig_alg":r[8],"sig_pub_fp8":r[9],"sig_val":r[10]}
+        post["reading_time"]=reading_time(post["title"]+post["summary"])
+        posts.append(post)
+    return posts,total
+
+def get_post_by_slug(slug,admin_preview=False):
+    if not _valid_slug(slug):return None
+    with sqlite3.connect(DB_FILE)as db:
+        cur=db.cursor()
+        if admin_preview:cur.execute("SELECT*FROM blog_posts WHERE slug=?LIMIT 1",(slug,))
+        else:cur.execute("SELECT*FROM blog_posts WHERE slug=?AND status='published'LIMIT 1",(slug,))
+        row=cur.fetchone()
+        if not row:return None
+        cols=[d[0]for d in cur.description]
+        post=dict(zip(cols,row))
+        for f in["title","content","summary","tags"]:post[f]=blog_decrypt(post.get(f"{f}_enc")or"")
+        post["tags"]=[t.strip()for t in post["tags"].split(",")if t.strip()]
+        post["reading_time"]=reading_time(post["content"])
+        return post
+
+def get_all_tags():
+    with sqlite3.connect(DB_FILE)as db:
+        cur=db.cursor()
+        cur.execute("SELECT tags_enc FROM blog_posts WHERE status='published'AND tags_enc!=''")
+        tags=set()
+        for(enc,)in cur.fetchall():tags.update(t.strip()for t in blog_decrypt(enc).split(",")if t.strip())
+        return sorted(tags)
+
+def blog_slug_exists(slug,exclude_id=None):
+    with sqlite3.connect(DB_FILE)as db:
+        cur=db.cursor()
+        if exclude_id:cur.execute("SELECT 1 FROM blog_posts WHERE slug=?AND id!=?LIMIT 1",(slug,exclude_id))
+        else:cur.execute("SELECT 1 FROM blog_posts WHERE slug=?LIMIT 1",(slug,))
+        return cur.fetchone()is not None
+
+def blog_save(post_id,author_id,title_html,content_html,summary_html,tags_csv,status,slug_in):
+    status=(status or"draft").lower()
+    if status not in("draft","published","archived"):return False,"Invalid status",None,None
+    title_html=sanitize_text(title_html,160)
+    content_html=sanitize_html((content_html or"")[:200000])
+    summary_html=sanitize_html((summary_html or"")[:20000])
+    tags_csv=sanitize_tags_csv(tags_csv)
+    if not title_html.strip()or not content_html.strip():return False,"Title/content required",None,None
+    slug=(slug_in or"").strip().lower()
+    if slug and not _valid_slug(slug):return False,"Invalid slug",None,None
+    if not slug:slug=_slugify(re.sub(r"<[^>]+>","",title_html))
+    if not _valid_slug(slug):return False,"Cannot generate slug",None,None
+    if blog_slug_exists(slug,exclude_id=post_id):slug=f"{slug}-{secrets.token_hex(2)}"
+    now=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    created_at=now
+    if post_id:
+        with sqlite3.connect(DB_FILE)as db:
+            cur=db.cursor()
+            cur.execute("SELECT created_at FROM blog_posts WHERE id=?",(post_id,))
+            row=cur.fetchone()
+            if row:created_at=row[0]
+    post={"slug":slug,"title":title_html,"summary":summary_html,"content":content_html,"tags":tags_csv,"status":status,"created_at":created_at,"updated_at":now,"author_id":author_id}
+    sig_alg,sig_fp8,sig_val=_sign_post(post)
+    title_enc=blog_encrypt("title",title_html,post_id)
+    content_enc=blog_encrypt("content",content_html,post_id)
+    summary_enc=blog_encrypt("summary",summary_html,post_id)
+    tags_enc=blog_encrypt("tags",tags_csv,post_id)
+    try:
+        with sqlite3.connect(DB_FILE)as db:
+            cur=db.cursor()
+            if post_id:
+                cur.execute("UPDATE blog_posts SET slug=?,title_enc=?,content_enc=?,summary_enc=?,tags_enc=?,status=?,updated_at=?,sig_alg=?,sig_pub_fp8=?,sig_val=? WHERE id=?",(slug,title_enc,content_enc,summary_enc,tags_enc,status,now,sig_alg,sig_fp8,sig_val,post_id))
+                audit.append("blog_update",{"id":post_id,"slug":slug},actor=session.get("username"))
+                return True,"Updated",post_id,slug
+            else:
+                cur.execute("INSERT INTO blog_posts(slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val)VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,now,author_id,sig_alg,sig_fp8,sig_val))
+                new_id=cur.lastrowid
+                audit.append("blog_create",{"id":new_id,"slug":slug},actor=session.get("username"))
+                return True,"Created",new_id,slug
+    except Exception as e:logger.error(f"blog_save error: {e}",exc_info=True);return False,"DB error",None,None
+
+def blog_delete(post_id):
+    try:
+        with sqlite3.connect(DB_FILE)as db:
+            cur=db.cursor()
+            cur.execute("DELETE FROM blog_posts WHERE id=?",(post_id,))
+            db.commit()
+            audit.append("blog_delete",{"id":post_id},actor=session.get("username"))
+        return True
+    except Exception as e:logger.error(f"blog_delete error: {e}",exc_info=True);return False
+
+@app.get("/sitemap.xml")
+def sitemap():
+    posts,_=get_published_posts(per_page=1000)
+    xml=['<?xml version="1.0" encoding="UTF-8"?>','<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for p in posts:xml.append(f'<url><loc>{request.url_root[:-1]}{url_for("blog_view",slug=p["slug"])}</loc><lastmod>{p["updated_at"][:10]}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>')
+    xml.append("</urlset>")
+    r=make_response("\n".join(xml))
+    r.headers["Content-Type"]="application/xml"
+    return r
+
+@app.get("/robots.txt")
+def robots():return f"User-agent: *\nAllow: /\nSitemap: {request.url_root}sitemap.xml",200,{"Content-Type":"text/plain"}
+
+@app.get("/feed")
+@app.get("/rss.xml")
+@app.get("/atom.xml")
+def rss_feed():
+    posts,_=get_published_posts(per_page=20)
+    updated=max(p["updated_at"]for p in posts)if posts else datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    items=[]
+    for p in posts:
+        items.append(f'<item><title>{bleach.clean(p["title"])}</title><link>{request.url_root[:-1]}{url_for("blog_view",slug=p["slug"])}</link><guid isPermaLink="true">{request.url_root[:-1]}{url_for("blog_view",slug=p["slug"])}</guid><pubDate>{datetime.strptime(p["created_at"],"%Y-%m-%d %H:%M:%S").strftime("%a, %d %b %Y %H:%M:%S GMT")}</pubDate><description><![CDATA[{p["summary"]or p["content"][:500]+"..."}]]></description></item>')
+    xml=f'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>QRS+ Quantum Blog</title><link>{request.url_root}</link><description>Post-quantum encrypted research</description><lastBuildDate>{updated}</lastBuildDate>{"".join(items)}</channel></rss>'
+    r=make_response(xml)
+    r.headers["Content-Type"]="application/rss+xml"
+    return r
+
+@app.route("/blog",defaults={"page":1})
+@app.route("/blog/page/<int:page>")
+@app.route("/blog/tag/<tag>",defaults={"page":1})
+@app.route("/blog/tag/<tag>/page/<int:page>")
+def blog_index(page,tag=None):
+    per_page=12
+    posts,total=get_published_posts(page,per_page,tag)
+    total_pages=(total+per_page-1)//per_page
+    seed=colorsync.sample()
+    accent=seed.get("hex","#49c2ff")
+    all_tags=get_all_tags()
+    return render_template_string(f'''
+<!doctype html><html lang="en" class="scroll-smooth"><head><meta charset="utf-8"><title>{"Tag: "+tag+" - "if tag else""}QRS+ Blog</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Post-quantum encrypted research notes">
+<meta property="og:title" content="QRS+ Blog"><meta property="og:description" content="Encrypted. Signed. Unbreakable.">
+<meta property="og:url" content="{{request.url}}"><meta property="og:type" content="website">
+<link rel="canonical" href="{{request.url}}"><link rel="alternate" type="application/rss+xml" href="{{url_for('rss_feed')}}">
+<link href="{{url_for('static',filename='css/roboto.css')}}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+<link href="{{url_for('static',filename='css/orbitron.css')}}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+<style>:root{{--bg:#0b0f17;--glass:#ffffff12;--stroke:#ffffff18;--text:#eaf5ff;--sub:#b8cfe4;--accent:{accent};--halo:color-mix(in oklab,var(--accent)44%,transparent)}}
+body,html{{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:'Roboto',sans-serif;overflow-x:hidden}}
+.nebula{{position:fixed;inset:0;pointer-events:none;background:radial-gradient(800px at 20%30%,var(--halo),transparent 70%),radial-gradient(1000px at 80%70%,var(--halo),transparent 70%);opacity:.4;filter:blur(80px);animation:drift 40s infinite alternate}}
+@keyframes drift{{from{{transform:translate(-5%,-5%)}}to{{transform:translate(5%,5%)}}}}
+.glass{{background:var(--glass);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--stroke);border-radius:24px}}
+.card{{transition:all .4s cubic-bezier(.17,.67,.12,.98)}}
+.card:hover{{transform:translateY(-16px)scale(1.02);box-shadow:0 32px 80px rgba(0,0,0,.55)}}
+.tag{{display:inline-block;padding:.4rem .9rem;margin:.3rem;background:var(--glass);border-radius:99px;transition:all .3s}}
+.tag:hover{{transform:translateZ(20px)scale(1.1);background:color-mix(in oklab,var(--accent)30%,var(--glass))}}
+</style></head><body>
+<div class="nebula"></div>
+<div class="container py-5 text-center mb-5">
+<h1 class="display-3" style="font-family:'Orbitron';background:linear-gradient(90deg,#{accent[1:]}dd,#{accent[1:]}aa);-webkit-background-clip:text;-webkit-text-fill-color:transparent">QRS+ Quantum Blog</h1>
+<p class="lead text-muted">Encrypted. Signed. Unbreakable.</p>
+</div>
+<div class="tag-cloud text-center mb-5">{"".join(f'<a href="{url_for("blog_index",tag=t)}" class="tag text-decoration-none">{t}</a>'for t in all_tags)}</div>
+<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+{"".join(f'<div class="col"><a href="{url_for("blog_view",slug=p["slug"])}" class="text-decoration-none"><div class="card glass h-100 p-4"><h3 class="h5 fw-bold">{p["title"]}</h3><p class="text-muted small">{p["summary"][:140]}...</p><div class="mt-auto"><small class="text-muted">{p["created_at"][:10]} • {p["reading_time"]} min</small></div></div></a></div>'for p in posts)}
+</div>
+<nav class="mt-5 d-flex justify-content-center gap-3">
+{('<a href="'+(url_for('blog_index',page=page-1,tag=tag)if tag else url_for('blog_index',page=page-1))+'" class="btn glass">Newer</a>'if page>1 else"")}
+<span class="align-self-center text-muted">Page {page} of {total_pages}</span>
+{('<a href="'+(url_for('blog_index',page=page+1,tag=tag)if tag else url_for('blog_index',page=page+1))+'" class="btn glass">Older</a>'if page<total_pages else"")}
+</nav>
+</body></html>
+''',posts=posts,page=page,total_pages=total_pages,all_tags=all_tags,tag=tag,accent=accent)
+
+@app.get("/blog/<slug>")
+def blog_view(slug):
+    post=get_post_by_slug(slug,admin_preview=session.get("is_admin",False))
+    if not post or(post["status"]!="published"and not session.get("is_admin")):abort(404)
+    sig_ok=_verify_post(post)
+    seed=colorsync.sample()
+    accent=seed.get("hex","#49c2ff")
+    return render_template_string(f'''
+<!doctype html><html lang="en" class="scroll-smooth"><head><meta charset="utf-8"><title>{post["title"]} — QRS+ Blog</title>
+<meta name="description" content="{post["summary"][:160]}"><meta property="og:title" content="{post["title"]}">
+<meta property="og:description" content="{post["summary"][:200]}"><meta property="og:type" content="article">
+<meta property="og:url" content="{{request.url}}"><meta property="article:published_time" content="{post["created_at"]}">
+<link rel="canonical" href="{{request.url}}">
+<link href="{{url_for('static',filename='css/roboto.css')}}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+<style>:root{{--accent:{accent};--halo:color-mix(in oklab,var(--accent)50%,#fff)}}
+body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
+.article{{max-width:720px;margin:4rem auto;padding:2rem;background:#0d1423dd;backdrop-filter:blur(20px);border-radius:32px;border:1px solid #ffffff18}}
+.halo{{position:fixed;inset:0;pointer-events:none;background:radial-gradient(600px at var(--x,50%) var(--y,50%),var(--halo),transparent 70%);opacity:.3;transition:opacity .4s}}
+.progress{{position:fixed;top:0;left:0;height:4px;background:var(--accent);transform-origin:left;transition:transform .3s;width:0%;z-index:9999}}
+</style></head><body>
+<div class="halo"></div><div class="progress" id="progress"></div>
+<article class="article">
+<header class="text-center mb-5"><h1 class="display-5" style="font-family:'Orbitron'">{post["title"]}</h1>
+<p class="text-muted">Published {post["created_at"][:10]} • {post["reading_time"]} min read</p>
+<p>Integrity: <strong style="color:{{'#8bd346'if sig_ok else'#ff3b1f'}}">{{'Verified'if sig_ok else'TAMPERED'}}</strong></p>
+</header>
+<div class="content lh-lg">{post["content"]|safe}</div>
+{('<footer class="mt-5 pt-4 border-top border-white border-opacity-10"><p class="mb-0">Tags: '+' '.join(f'<a href="{url_for("blog_index",tag=t)}" class="badge bg-dark text-white text-decoration-none me-2">{t}</a>'for t in post["tags"])+"</p></footer>"if post["tags"]else"")}
+</article>
+<script>
+document.addEventListener('mousemove',e=>{{document.querySelector('.halo').style.setProperty('--x',e.clientX+'px');document.querySelector('.halo').style.setProperty('--y',e.clientY+'px')}});
+window.addEventListener('scroll',()=>{const h=document.documentElement;const p=(h.scrollTop||document.body.scrollTop)/((h.scrollHeight||document.body.scrollHeight)-h.clientHeight);document.getElementById('progress').style.transform=`scaleX(${p})`});
+</script>
+</body></html>
+''',post=post,sig_ok=sig_ok,accent=accent)
+
+@app.route("/settings/blog",methods=["GET","POST"])
+def blog_admin():
+    guard=_require_admin()
+    if guard:return guard
+    form=BlogForm()
+    posts=blog_list_all_admin()
+    seed=colorsync.sample()
+    accent=seed.get("hex","#49c2ff")
+    csrf_token=generate_csrf()
+    if form.validate_on_submit():
+        uid=get_user_id(session["username"])
+        ok,msg,pid,slug=blog_save(None,uid,form.title.data,form.content.data,form.summary.data or"",form.tags.data or"",form.status.data,form.slug.data or None)
+        flash(msg,"success"if ok else"danger")
+        if ok:return redirect(url_for("blog_admin"))
+    return render_template_string(f'''
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>QRS+ — Blog Admin</title>
+<meta name="csrf-token" content="{csrf_token}">
+<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+<style>:root{{--accent:{accent}}}body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
+.sidebar{{position:fixed;top:0;left:0;height:100%;width:260px;background:#0d1423;border-right:1px solid #ffffff22;padding-top:60px;overflow:auto}}
+.content{{margin-left:260px;padding:18px}}
+.card{{background:#ffffff10;border:1px solid #ffffff22;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.55)}}
+.list-item{{padding:.6rem .5rem;border-bottom:1px dashed #ffffff22;cursor:pointer}}
+.list-item:hover{{background:#ffffff10}}
+.list-item.active{{background:color-mix(in oklab,var(--accent)16%,transparent)}}
+.btn-acc{{background:linear-gradient(135deg,color-mix(in oklab,var(--accent)70%,#7ae6ff),color-mix(in oklab,var(--accent)50%,#2bd1ff));border:0;color:#07121f;font-weight:900}}
+.editor{{min-height:300px;border-radius:12px;border:1px solid #ffffff22;background:#0d1423;padding:12px}}
+</style></head><body>
+<nav class="navbar navbar-dark fixed-top px-3"><a class="navbar-brand" href="{{url_for('home')}}">QRS+</a>
+<div class="d-flex gap-3"><a class="nav-link" href="{{url_for('dashboard')}}">Dashboard</a><span class="badge bg-light text-dark">Blog Admin</span></div></nav>
+<div class="sidebar"><div class="p-3"><h5>Posts</h5><div id="postList" class="card">
+{"".join(f'<div class="list-item" data-id="{p["id"]}"><strong>{p["title"]or"(untitled)"}</strong><span class="badge bg-secondary float-end">{p["status"]}</span><div class="text-muted small">{p["updated_at"]} • {p["slug"]}</div></div>'for p in posts)}
+</div></div></div>
+<div class="content"><div class="card p-4"><form method="POST">{form.hidden_tag()}
+<div class="row g-3"><div class="col-12 col-lg-8">{form.title.label}{form.title(class="form-control")}</div>
+<div class="col-8 col-lg-3">{form.slug.label}{form.slug(class="form-control",placeholder="auto")}</div>
+<div class="col-4 col-lg-1">{form.status.label}{form.status(class="form-select")}</div>
+<div class="col-12">{form.summary.label}{form.summary(class="form-control",rows=4)}</div>
+<div class="col-12">{form.content.label}{form.content(class="form-control",rows=15)}</div>
+<div class="col-12 col-md-8">{form.tags.label}{form.tags(class="form-control")}</div>
+<div class="col-12 col-md-4 d-flex gap-2">{form.submit(class="btn btn-acc w-100")}</div></div></form></div></div>
+<script src="{{url_for('static',filename='js/jquery.min.js')}}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+<script>
+const CSRF='{csrf_token}';
+async function load(id){$('.list-item').removeClass('active');$(`.list-item[data-id="${id}"]`).addClass('active');
+const r=await fetch(`/admin/blog/api/post/${id}`);const j=await r.json();
+$('#id').val(j.id);$('#title').val(j.title);$('#slug').val(j.slug);$('#status').val(j.status);
+$('#summary').val(j.summary);$('#content').val(j.content);$('#tags').val(j.tags);}
+$('.list-item').click(function(){{load($(this).data('id'));}});
+</script></body></html>
+''',form=form,posts=posts,csrf_token=csrf_token,accent=accent)
+
+@app.get("/admin/blog/api/posts")
+def blog_api_posts():
+    guard=_require_admin()
+    if guard:return guard
+    return jsonify({"ok":True,"posts":blog_list_all_admin(limit=500)})
+
+@app.get("/admin/blog/api/post/<int:post_id>")
+def blog_api_post_get(post_id):
+    guard=_require_admin()
+    if guard:return guard
+    with sqlite3.connect(DB_FILE)as db:
+        cur=db.cursor()
+        cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status FROM blog_posts WHERE id=? LIMIT 1",(post_id,))
+        row=cur.fetchone()
+    if not row:return jsonify({"ok":False,"msg":"Not found"}),404
+    return jsonify({"id":row[0],"slug":row[1],"title":blog_decrypt(row[2]),"content":blog_decrypt(row[3]),"summary":blog_decrypt(row[4]),"tags":blog_decrypt(row[5]),"status":row[6]})
+
+@app.post("/admin/blog/api/save")
+def blog_api_save():
+    guard=_require_admin()
+    if guard:return guard
+    body=request.get_json()or{}
+    uid=get_user_id(session["username"])
+    ok,msg,pid,slug=blog_save(body.get("id"),uid,body.get("title",""),body.get("content",""),body.get("summary",""),body.get("tags",""),body.get("status","draft"),body.get("slug"))
+    return jsonify({"ok":ok,"msg":msg,"id":pid,"slug":slug}),200 if ok else 400
+
+@app.post("/admin/blog/api/delete")
+def blog_api_delete():
+    guard=_require_admin()
+    if guard:return guard
+    body=request.get_json()or{}
+    pid=body.get("id")
+    if not pid or not blog_delete(int(pid)):return jsonify({"ok":False,"msg":"Delete failed"}),500
+    return jsonify({"ok":True})
+
+def blog_list_all_admin(limit=200,offset=0):
+    with sqlite3.connect(DB_FILE)as db:
+        cur=db.cursor()
+        cur.execute("SELECT id,slug,title_enc,status,created_at,updated_at FROM blog_posts ORDER BY updated_at DESC LIMIT ? OFFSET ?",(limit,offset))
+        rows=cur.fetchall()
+    return[{"id":r[0],"slug":r[1],"title":blog_decrypt(r[2]),"status":r[3],"created_at":r[4],"updated_at":r[5]}for r in rows]
+
+@app.route("/blog/admin")
+def blog_admin_redirect():
+    guard=_require_admin()
+    if guard:return guard
+    return redirect(url_for("blog_admin"))
+
+@app.route("/settings/blog",methods=["GET","POST"])
+def blog_admin():
+    guard=_require_admin()
+    if guard:return guard
+    form=BlogForm()
+    posts=blog_list_all_admin()
+    seed=colorsync.sample()
+    accent=seed.get("hex","#49c2ff")
+    csrf_token=generate_csrf()
+    if form.validate_on_submit():
+        uid=get_user_id(session["username"])
+        ok,msg,pid,slug=blog_save(None,uid,form.title.data,form.content.data,form.summary.data or"",form.tags.data or"",form.status.data,form.slug.data or None)
+        flash(msg,"success"if ok else"danger")
+        if ok:return redirect(url_for("blog_admin"))
+    return render_template_string(f'''
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>QRS+ — Blog Admin</title>
+<meta name="csrf-token" content="{csrf_token}">
+<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+<link href="{{url_for('static',filename='css/roboto.css')}}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+<link href="{{url_for('static',filename='css/orbitron.css')}}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+<style>:root{{--accent:{accent}}}body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
+.sidebar{{position:fixed;top:0;left:0;height:100%;width:260px;background:#0d1423;border-right:1px solid #ffffff22;padding-top:60px;overflow:auto}}
+.content{{margin-left:260px;padding:18px}}
+.card{{background:#ffffff10;border:1px solid #ffffff22;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.55)}}
+.list-item{{padding:.6rem .5rem;border-bottom:1px dashed #ffffff22;cursor:pointer}}
+.list-item:hover{{background:#ffffff10}}
+.list-item.active{{background:color-mix(in oklab,var(--accent)16%,transparent)}}
+.btn-acc{{background:linear-gradient(135deg,color-mix(in oklab,var(--accent)70%,#7ae6ff),color-mix(in oklab,var(--accent)50%,#2bd1ff));border:0;color:#07121f;font-weight:900}}
+.editor{{min-height:300px;border-radius:12px;border:1px solid #ffffff22;background:#0d1423;padding:12px}}
+</style></head><body>
+<nav class="navbar navbar-dark fixed-top px-3"><a class="navbar-brand" href="{{url_for('home')}}">QRS+</a>
+<div class="d-flex gap-3"><a class="nav-link" href="{{url_for('dashboard')}}">Dashboard</a><span class="badge bg-light text-dark">Blog Admin</span></div></nav>
+<div class="sidebar"><div class="p-3"><h5>Posts</h5><button class="btn btn-sm btn-acc mb-2 w-100" id="btnNew">New Post</button>
+<div id="postList" class="card">{"".join(f'<div class="list-item" data-id="{p["id"]}"><strong>{p["title"]or"(untitled)"}</strong><span class="badge bg-secondary float-end">{p["status"]}</span><div class="text-muted small">{p["updated_at"]} • {p["slug"]}</div></div>'for p in posts)}</div></div></div>
+<div class="content"><div class="card p-4"><form method="POST">{form.hidden_tag()}
+<input type="hidden" name="id" id="postId">
+<div class="row g-3"><div class="col-12 col-lg-8">{form.title.label}{form.title(class="form-control")}</div>
+<div class="col-8 col-lg-3">{form.slug.label}{form.slug(class="form-control",placeholder="auto")}</div>
+<div class="col-4 col-lg-1">{form.status.label}{form.status(class="form-select")}</div>
+<div class="col-12">{form.summary.label}{form.summary(class="form-control",rows=4)}</div>
+<div class="col-12">{form.content.label}{form.content(class="form-control",rows=18)}</div>
+<div class="col-12 col-md-8">{form.tags.label}{form.tags(class="form-control")}</div>
+<div class="col-12 col-md-4 d-flex gap-2">{form.submit(class="btn btn-acc w-100")}<button type="button" class="btn btn-danger w-100" id="btnDelete" disabled>Delete</button></div>
+<div id="msg" class="col-12 text-muted mt-3"></div></div></form></div></div>
+<script src="{{url_for('static',filename='js/jquery.min.js')}}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+<script>
+const CSRF='{csrf_token}';
+function msg(t,o){$('#msg').text(t).css('color',o?'#8bd346':'#ff6a6a');}
+async function load(id){$('.list-item').removeClass('active');$(`.list-item[data-id="${id}"]`).addClass('active');msg('Loading...');
+const r=await fetch(`/admin/blog/api/post/${id}`);const j=await r.json();
+$('#postId').val(j.id);$('#title').val(j.title);$('#slug').val(j.slug);$('#status').val(j.status);
+$('#summary').val(j.summary);$('#content').val(j.content);$('#tags').val(j.tags);
+$('#btnDelete').prop('disabled',!j.id);msg('Loaded',true);}
+async function save(){msg('Saving...');const p={{id:$('#postId').val()||null,title:$('#title').val(),slug:$('#slug').val(),
+status:$('#status').val(),summary:$('#summary').val(),content:$('#content').val(),tags:$('#tags').val()}};
+const r=await fetch('/admin/blog/api/save',{{method:'POST',headers:{{'Content-Type':'application/json','X-CSRFToken':CSRF}},body:JSON.stringify(p)}});
+const j=await r.json();if(r.ok&&j.ok){$('#postId').val(j.id);$('#slug').val(j.slug);$('#btnDelete').prop('disabled',false);await refresh(j.id);msg(j.msg||'Saved',true);}else msg(j.msg||'Failed');}
+async function delPost(){if(!confirm('Delete permanently?'))return;const id=$('#postId').val();if(!id)return;
+const r=await fetch('/admin/blog/api/delete',{{method:'POST',headers:{{'Content-Type':'application/json','X-CSRFToken':CSRF}},body:JSON.stringify({{id:Number(id)}})}});
+const j=await r.json();if(r.ok&&j.ok){refresh();$('#postId').val('');$('#btnDelete').prop('disabled',true);msg('Deleted',true);}}
+async function refresh(sel){const r=await fetch('/admin/blog/api/posts');const j=await r.json();$('#postList').empty();
+j.posts.forEach(p=>{const d=$('<div class="list-item">').attr('data-id',p.id).html(`<strong>${p.title||'(untitled)'}</strong><span class="badge bg-secondary float-end">${p.status}</span><div class="text-muted small">${p.updated_at} • ${p.slug}</div>`);
+d.click(()=>load(p.id));$('#postList').append(d);});if(sel)$(`.list-item[data-id="${sel}"]`).addClass('active');}
+$('#btnNew').click(()=>{$('.list-item').removeClass('active');$('#postId').val('');$('#btnDelete').prop('disabled',true);$('#blogForm')[0].reset();msg('New post');});
+$('#btnDelete').click(delPost);$('#blogForm').on('submit',e=>{e.preventDefault();save();});
+$('.list-item').click(function(){{load($(this).data('id'));}});refresh();
+</script>
+</body></html>
+''',form=form,posts=posts,csrf_token=csrf_token,accent=accent)
 def overwrite_hazard_reports_by_timestamp(cursor, expiration_str: str, passes: int = 7):
     col_types = [
         ("latitude","TEXT"), ("longitude","TEXT"), ("street_name","TEXT"),
