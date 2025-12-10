@@ -579,19 +579,24 @@ csrf = CSRFProtect(app)
 @app.after_request
 def apply_csp(response):
     csp_policy = ("default-src 'self'; "
-                  "script-src 'self' 'unsafe-inline'; "
+                  "script-src 'self'; "
                   "style-src 'self' 'unsafe-inline'; "
                   "font-src 'self' data:; "
                   "img-src 'self' data:; "
                   "object-src 'none'; "
-                  "base-uri 'self'; ")
+                  "base-uri 'self'; "
+                  "form-action 'self'; "
+                  "frame-ancestors 'none'; "
+                  "upgrade-insecure-requests")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
+    
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 def _sanitize(s: str) -> str:
     if not isinstance(s, str):
         return ""
     return _JSON_FENCE.sub("", s).strip()
+    
 class KeyManager:
     encryption_key: Optional[bytes]
     passphrase_env_var: str
@@ -2136,21 +2141,39 @@ def get_published_posts(page=1,per_page=12,tag=None):
         posts.append(post)
     return posts,total
 
-def get_post_by_slug(slug,admin_preview=False):
-    if not _valid_slug(slug):return None
-    with sqlite3.connect(DB_FILE)as db:
-        cur=db.cursor()
-        if admin_preview:cur.execute("SELECT*FROM blog_posts WHERE slug=?LIMIT 1",(slug,))
-        else:cur.execute("SELECT*FROM blog_posts WHERE slug=?AND status='published'LIMIT 1",(slug,))
-        row=cur.fetchone()
-        if not row:return None
-        cols=[d[0]for d in cur.description]
-        post=dict(zip(cols,row))
-        for f in["title","content","summary","tags"]:post[f]=blog_decrypt(post.get(f"{f}_enc")or"")
-        post["tags"]=[t.strip()for t in post["tags"].split(",")if t.strip()]
-        post["reading_time"]=reading_time(post["content"])
+def get_post_by_slug(slug, *, admin_preview=False):
+    if not _valid_slug(slug):
+        return None
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        if admin_preview and session.get("is_admin"):
+            cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE slug=? LIMIT 1", (slug,))
+        else:
+            cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE slug=? AND status='published' LIMIT 1", (slug,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        post = dict(zip(cols, row))
+        for f in ["title","content","summary","tags"]:
+            post[f] = blog_decrypt(post.get(f"{f}_enc") or "")
+        post["tags"] = [t.strip() for t in post["tags"].split(",") if t.strip()]
+        post["reading_time"] = reading_time(post["content"])
         return post
 
+def generate_unique_slug(base):
+    slug = _slugify(base)[:100]
+    original = slug
+    counter = 1
+    while blog_slug_exists(slug):
+        suffix = secrets.token_hex(3)
+        slug = f"{original[:95]}-{suffix}"
+        counter += 1
+        if counter > 100:
+            slug = f"{original[:90]}-{secrets.token_hex(5)}"
+            break
+    return slug
+    
 def get_all_tags():
     with sqlite3.connect(DB_FILE)as db:
         cur=db.cursor()
@@ -2165,47 +2188,68 @@ def blog_slug_exists(slug,exclude_id=None):
         if exclude_id:cur.execute("SELECT 1 FROM blog_posts WHERE slug=?AND id!=?LIMIT 1",(slug,exclude_id))
         else:cur.execute("SELECT 1 FROM blog_posts WHERE slug=?LIMIT 1",(slug,))
         return cur.fetchone()is not None
-
-def blog_save(post_id,author_id,title_html,content_html,summary_html,tags_csv,status,slug_in):
-    status=(status or"draft").lower()
-    if status not in("draft","published","archived"):return False,"Invalid status",None,None
-    title_html=sanitize_text(title_html,160)
-    content_html=sanitize_html((content_html or"")[:200000])
-    summary_html=sanitize_html((summary_html or"")[:20000])
-    tags_csv=sanitize_tags_csv(tags_csv)
-    if not title_html.strip()or not content_html.strip():return False,"Title/content required",None,None
-    slug=(slug_in or"").strip().lower()
-    if slug and not _valid_slug(slug):return False,"Invalid slug",None,None
-    if not slug:slug=_slugify(re.sub(r"<[^>]+>","",title_html))
-    if not _valid_slug(slug):return False,"Cannot generate slug",None,None
-    if blog_slug_exists(slug,exclude_id=post_id):slug=f"{slug}-{secrets.token_hex(2)}"
-    now=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    created_at=now
+        
+def blog_save(post_id, author_id, title_html, content_html, summary_html, tags_csv, status, slug_in):
+    from markupsafe import escape
+    status = (status or "draft").lower()
+    if status not in ("draft","published","archived"):
+        return False, "Invalid status", None, None
+    title_html = escape(sanitize_text(title_html, 160))
+    content_html = sanitize_html((content_html or "")[:200000])
+    summary_html = escape(sanitize_html((summary_html or "")[:20000]))
+    tags_csv = sanitize_tags_csv(tags_csv)
+    if not title_html.strip() or not content_html.strip():
+        return False, "Title/content required", None, None
+    slug = (slug_in or "").strip().lower()
+    if slug and not _valid_slug(slug):
+        return False, "Invalid slug", None, None
+    if not slug:
+        slug = generate_unique_slug(title_html)
+    else:
+        slug = generate_unique_slug(slug)
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    created_at = now
     if post_id:
-        with sqlite3.connect(DB_FILE)as db:
-            cur=db.cursor()
-            cur.execute("SELECT created_at FROM blog_posts WHERE id=?",(post_id,))
-            row=cur.fetchone()
-            if row:created_at=row[0]
-    post={"slug":slug,"title":title_html,"summary":summary_html,"content":content_html,"tags":tags_csv,"status":status,"created_at":created_at,"updated_at":now,"author_id":author_id}
-    sig_alg,sig_fp8,sig_val=_sign_post(post)
-    title_enc=blog_encrypt("title",title_html,post_id)
-    content_enc=blog_encrypt("content",content_html,post_id)
-    summary_enc=blog_encrypt("summary",summary_html,post_id)
-    tags_enc=blog_encrypt("tags",tags_csv,post_id)
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            cur.execute("SELECT created_at FROM blog_posts WHERE id=?", (post_id,))
+            row = cur.fetchone()
+            if row:
+                created_at = row[0]
+    post = {
+        "slug": slug,
+        "title": str(title_html),
+        "summary": str(summary_html),
+        "content": content_html,
+        "tags": tags_csv,
+        "status": status,
+        "created_at": created_at,
+        "updated_at": now,
+        "author_id": author_id
+    }
+    sig_alg, sig_fp8, sig_val = _sign_post(post)
+    title_enc = blog_encrypt("title", str(title_html), post_id)
+    content_enc = blog_encrypt("content", content_html, post_id)
+    summary_enc = blog_encrypt("summary", str(summary_html), post_id)
+    tags_enc = blog_encrypt("tags", tags_csv, post_id)
     try:
-        with sqlite3.connect(DB_FILE)as db:
-            cur=db.cursor()
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
             if post_id:
-                cur.execute("UPDATE blog_posts SET slug=?,title_enc=?,content_enc=?,summary_enc=?,tags_enc=?,status=?,updated_at=?,sig_alg=?,sig_pub_fp8=?,sig_val=? WHERE id=?",(slug,title_enc,content_enc,summary_enc,tags_enc,status,now,sig_alg,sig_fp8,sig_val,post_id))
-                audit.append("blog_update",{"id":post_id,"slug":slug},actor=session.get("username"))
-                return True,"Updated",post_id,slug
+                cur.execute("""UPDATE blog_posts SET slug=?,title_enc=?,content_enc=?,summary_enc=?,tags_enc=?,status=?,updated_at=?,sig_alg=?,sig_pub_fp8=?,sig_val=? WHERE id=?""",
+                            (slug, title_enc, content_enc, summary_enc, tags_enc, status, now, sig_alg, sig_fp8, sig_val, post_id))
+                audit.append("blog_update", {"id": post_id, "slug": slug}, actor=session.get("username"))
+                return True, "Updated", post_id, slug
             else:
-                cur.execute("INSERT INTO blog_posts(slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val)VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,now,author_id,sig_alg,sig_fp8,sig_val))
-                new_id=cur.lastrowid
-                audit.append("blog_create",{"id":new_id,"slug":slug},actor=session.get("username"))
-                return True,"Created",new_id,slug
-    except Exception as e:logger.error(f"blog_save error: {e}",exc_info=True);return False,"DB error",None,None
+                cur.execute("""INSERT INTO blog_posts(slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (slug, title_enc, content_enc, summary_enc, tags_enc, status, created_at, now, author_id, sig_alg, sig_fp8, sig_val))
+                new_id = cur.lastrowid
+                audit.append("blog_create", {"id": new_id, "slug": slug}, actor=session.get("username"))
+                return True, "Created", new_id, slug
+    except Exception as e:
+        logger.error(f"blog_save error: {e}", exc_info=True)
+        return False, "DB error", None, None
 
 def blog_delete(post_id):
     try:
@@ -2291,21 +2335,26 @@ body,html{{margin:0;height:100%;background:var(--bg);color:var(--text);font-fami
 </body></html>
 ''',posts=posts,page=page,total_pages=total_pages,all_tags=all_tags,tag=tag,accent=accent)
 
-@app.get("/blog/<slug>")
+@app.route("/blog/<slug>")
 def blog_view(slug):
-    post=get_post_by_slug(slug,admin_preview=session.get("is_admin",False))
-    if not post or(post["status"]!="published"and not session.get("is_admin")):abort(404)
-    sig_ok=_verify_post(post)
-    seed=colorsync.sample()
-    accent=seed.get("hex","#49c2ff")
+    post = get_post_by_slug(slug, admin_preview=session.get("is_admin", False))
+    if not post or (post["status"] != "published" and not session.get("is_admin")):
+        abort(404)
+    sig_ok = _verify_post(post)
+    seed = colorsync.sample()
+    accent = seed.get("hex", "#49c2ff")
+    from markupsafe import escape
+    safe_title = escape(post["title"])
+    safe_summary = escape(post["summary"])
     return render_template_string(f'''
-<!doctype html><html lang="en" class="scroll-smooth"><head><meta charset="utf-8"><title>{post["title"]} — QRS+ Blog</title>
-<meta name="description" content="{post["summary"][:160]}"><meta property="og:title" content="{post["title"]}">
-<meta property="og:description" content="{post["summary"][:200]}"><meta property="og:type" content="article">
-<meta property="og:url" content="{{request.url}}"><meta property="article:published_time" content="{post["created_at"]}">
-<link rel="canonical" href="{{request.url}}">
-<link href="{{url_for('static',filename='css/roboto.css')}}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+<!doctype html><html lang="en" class="scroll-smooth"><head><meta charset="utf-8"><title>{safe_title} — QRS+ Blog</title>
+<meta name="description" content="{safe_summary[:160]}"><meta property="og:title" content="{safe_title}">
+<meta property="og:description" content="{safe_summary[:200]}"><meta property="og:type" content="article">
+<meta property="og:url" content="{{{{request.url}}}}"><meta property="article:published_time" content="{post["created_at"]}">
+<link rel="canonical" href="{{{{request.url}}}}">
+<link href="{{{{url_for('static',filename='css/roboto.css')}}}}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+<link href="{{{{url_for('static',filename='css/orbitron.css')}}}}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+<link rel="stylesheet" href="{{{{url_for('static',filename='css/bootstrap.min.css')}}}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
 <style>:root{{--accent:{accent};--halo:color-mix(in oklab,var(--accent)50%,#fff)}}
 body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
 .article{{max-width:720px;margin:4rem auto;padding:2rem;background:#0d1423dd;backdrop-filter:blur(20px);border-radius:32px;border:1px solid #ffffff18}}
@@ -2314,20 +2363,23 @@ body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
 </style></head><body>
 <div class="halo"></div><div class="progress" id="progress"></div>
 <article class="article">
-<header class="text-center mb-5"><h1 class="display-5" style="font-family:'Orbitron'">{post["title"]}</h1>
+<header class="text-center mb-5"><h1 class="display-5" style="font-family:'Orbitron'">{safe_title}</h1>
 <p class="text-muted">Published {post["created_at"][:10]} • {post["reading_time"]} min read</p>
-<p>Integrity: <strong style="color:{{'#8bd346'if sig_ok else'#ff3b1f'}}">{{'Verified'if sig_ok else'TAMPERED'}}</strong></p>
+<p>Integrity: <strong style="color:{{'#8bd346' if sig_ok else '#ff3b1f'}}">{{'Verified' if sig_ok else 'TAMPERED'}}</strong></p>
 </header>
 <div class="content lh-lg">{post["content"]|safe}</div>
-{('<footer class="mt-5 pt-4 border-top border-white border-opacity-10"><p class="mb-0">Tags: '+' '.join(f'<a href="{url_for("blog_index",tag=t)}" class="badge bg-dark text-white text-decoration-none me-2">{t}</a>'for t in post["tags"])+"</p></footer>"if post["tags"]else"")}
+{('<footer class="mt-5 pt-4 border-top border-white border-opacity-10"><p class="mb-0">Tags: ' + ' '.join(f'<a href="{{{{url_for("blog_index",tag=t)}}}}" class="badge bg-dark text-white text-decoration-none me-2">{escape(t)}</a>' for t in post["tags"]) + "</p></footer>" if post["tags"] else "")}
 </article>
 <script>
 document.addEventListener('mousemove',e=>{{document.querySelector('.halo').style.setProperty('--x',e.clientX+'px');document.querySelector('.halo').style.setProperty('--y',e.clientY+'px')}});
-window.addEventListener('scroll',()=>{const h=document.documentElement;const p=(h.scrollTop||document.body.scrollTop)/((h.scrollHeight||document.body.scrollHeight)-h.clientHeight);document.getElementById('progress').style.transform=`scaleX(${p})`});
+window.addEventListener('scroll',()=>{{
+  const h=document.documentElement;
+  const p=(h.scrollTop||document.body.scrollTop)/((h.scrollHeight||document.body.scrollHeight)-h.clientHeight);
+  document.getElementById('progress').style.transform=`scaleX(${p})`;
+}});
 </script>
 </body></html>
-''',post=post,sig_ok=sig_ok,accent=accent)
-
+''', post=post, sig_ok=sig_ok, accent=accent, safe_title=safe_title, safe_summary=safe_summary, escape=escape)
 @app.route("/settings/blog",methods=["GET","POST"])
 def blog_admin():
     guard=_require_admin()
