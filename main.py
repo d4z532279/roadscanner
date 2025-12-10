@@ -590,6 +590,14 @@ def apply_csp(response):
                   "upgrade-insecure-requests")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
+
+@app.after_request
+def add_no_cache_headers(response: Response) -> Response:
+    if request.path.startswith(('/blog', '/settings/blog', '/admin/blog')):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
     
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 def _sanitize(s: str) -> str:
