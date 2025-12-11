@@ -104,7 +104,8 @@ except Exception:
 import geonamescache
 import re,secrets,json,hashlib,sqlite3,bleach
 from datetime import datetime
-from flask import render_template_string,request,redirect,url_for,session,jsonify,flash,generate_csrf,Response,abort,make_response
+from flask import render_template_string, request, redirect, url_for, session, jsonify, flash, Response, abort, make_response
+from flask_wtf.csrf import generate_csrf
 from flask_wtf import FlaskForm
 from wtforms import StringField,TextAreaField,SelectField,SubmitField
 from wtforms.validators import DataRequired,Length
