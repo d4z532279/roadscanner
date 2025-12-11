@@ -2556,10 +2556,13 @@ body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
   </div>
 </div>
 <script>
+// ALL { AND } ARE NOW DOUBLED → {{ AND }}
 const CSRF = "{csrf_token}";
+
 function msg(t,o){{
   $('#msg').text(t).css('color',o?'#8bd346':'#ff6a6a');
 }}
+
 async function load(id){{
   $('.list-item').removeClass('active');
   $(`.list-item[data-id="${{id}}"]`).addClass('active');
@@ -2576,6 +2579,7 @@ async function load(id){{
   $('#btnDelete').prop('disabled', !j.id);
   msg('Loaded', true);
 }}
+
 async function save(){{
   msg('Saving...');
   const p = {{
@@ -2601,6 +2605,7 @@ async function save(){{
     msg(j.msg || 'Saved', true);
   }} else msg(j.msg || 'Failed');
 }}
+
 async function delPost(){{
   if(!confirm('Delete permanently?')) return;
   const id = $('#postId').val();
@@ -2618,6 +2623,7 @@ async function delPost(){{
     msg('Deleted', true);
   }}
 }}
+
 async function refresh(sel){{
   const r = await fetch('/admin/blog/api/posts');
   const j = await r.json();
@@ -2631,6 +2637,7 @@ async function refresh(sel){{
   }});
   if(sel) $(`.list-item[data-id="${{sel}}"]`).addClass('active');
 }}
+
 $('#btnNew').click(()=>{{
   $('.list-item').removeClass('active');
   $('#postId').val('');
@@ -2638,12 +2645,19 @@ $('#btnNew').click(()=>{{
   $('#blogForm')[0].reset();
   msg('New post');
 }});
+
 $('#btnDelete').click(delPost);
-$('#blogForm').on('submit',e=>{e.preventDefault();save();});
+
+// THE OFFENDING LINE — NOW FIXED:
+$('#blogForm').on('submit',e=>{{
+  e.preventDefault();
+  save();
+}});
+
 $('.list-item').click(function(){{load($(this).data('id'));}});
+
 refresh();
 </script>
-
 </body>
 </html>'''
 
