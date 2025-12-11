@@ -102,17 +102,7 @@ except Exception:
 
 
 import geonamescache
-import re,secrets,json,hashlib,sqlite3,bleach
-from datetime import datetime
-from flask import render_template_string, request, redirect, url_for, session, jsonify, flash, Response, abort, make_response
-from flask_wtf.csrf import generate_csrf
-from flask_wtf import FlaskForm
-from wtforms import StringField,TextAreaField,SelectField,SubmitField
-from wtforms.validators import DataRequired,Length
-from bleach.sanitizer import Cleaner
 
-_SLUG_RE=re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
-cleaner=Cleaner(tags=['h1','h2','h3','h4','h5','h6','p','br','strong','em','blockquote','ul','ol','li','a','img','figure','figcaption','pre','code','table','thead','tbody','tr','th','td','hr','div','span','section','article','header','footer','aside','time','del','ins','mark','small','sub','sup','details','summary'],attributes={'*':['class','id','title','itemscope','itemtype','itemprop'],'a':['href','rel','name'],'img':['src','alt','width','height','loading','decoding','srcset','sizes'],'time':['datetime']},protocols=['http','https','mailto','data'],strip=False)
 
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
@@ -205,7 +195,7 @@ if 'parse_safe_float' not in globals():
             raise ValueError("Non-finite float not allowed")
         return f
 
-
+# === ENV names for key-only-in-env mode ===
 ENV_SALT_B64              = "QRS_SALT_B64"             # base64 salt for KDF (Scrypt/Argon2)
 ENV_X25519_PUB_B64        = "QRS_X25519_PUB_B64"
 ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  # AESGCM(nonce|ct) b64
@@ -217,7 +207,7 @@ ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
 ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     # AESGCM(nonce|ct) b64
 ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env) b64
 
-
+# Small b64 helpers (env <-> bytes)
 def _b64set(name: str, raw: bytes) -> None:
     os.environ[name] = base64.b64encode(raw).decode("utf-8")
 
@@ -579,35 +569,20 @@ csrf = CSRFProtect(app)
 
 @app.after_request
 def apply_csp(response):
-    csp_policy = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "font-src 'self' data:; "
-        "img-src 'self' data:; "
-        "object-src 'none'; "
-        "base-uri 'self'; "
-        "connect-src 'self'; "   
-        "frame-ancestors 'none'; "
-        "upgrade-insecure-requests"
-    )
+    csp_policy = ("default-src 'self'; "
+                  "script-src 'self' 'unsafe-inline'; "
+                  "style-src 'self' 'unsafe-inline'; "
+                  "font-src 'self' data:; "
+                  "img-src 'self' data:; "
+                  "object-src 'none'; "
+                  "base-uri 'self'; ")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
-
-@app.after_request
-def add_no_cache_headers(response: Response) -> Response:
-    if request.path.startswith(('/blog', '/settings/blog', '/admin/blog')):
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
-    
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 def _sanitize(s: str) -> str:
     if not isinstance(s, str):
         return ""
     return _JSON_FENCE.sub("", s).strip()
-    
 class KeyManager:
     encryption_key: Optional[bytes]
     passphrase_env_var: str
@@ -621,7 +596,7 @@ class KeyManager:
     sig_pub: Optional[bytes] = None
     _sig_priv_enc: Optional[bytes] = None
     sealed_store: Optional["SealedStore"] = None
-    
+    # note: no on-disk dirs/paths anymore
 
     def _oqs_kem_name(self) -> Optional[str]: ...
     def _load_or_create_hybrid_keys(self) -> None: ...
@@ -1150,13 +1125,16 @@ def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
     return x25519.X25519PrivateKey.from_private_bytes(raw)
 
 def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
-    
-    
+    """
+    Return the raw ML-KEM private key bytes suitable for oqs decapsulation.
+    Prefers sealed cache; falls back to ENV-encrypted key if present.
+    """
+    # Prefer sealed cache (already raw)
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
 
-    
+    # Otherwise try the env-encrypted private key
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1221,7 +1199,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
     enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
 
     if not (alg and pub and enc):
-        
+        # Need to generate keys and place into ENV
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
             raise RuntimeError(f"{self.passphrase_env_var} not set")
@@ -1237,7 +1215,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         try_pq = _oqs_sig_name() if oqs is not None else None
         if try_pq:
             
-            with oqs.Signature(try_pq) as s:  
+            with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
                 pub_raw = s.generate_keypair()
                 sk_raw  = s.export_secret_key()
             n = secrets.token_bytes(12)
@@ -1250,7 +1228,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         else:
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: ML-DSA signature required, but oqs unavailable.")
-            
+            # Ed25519 fallback
             kp  = ed25519.Ed25519PrivateKey.generate()
             pub_raw = kp.public_key().public_bytes(
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
@@ -1308,8 +1286,8 @@ _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
 _KM._decrypt_x25519_priv        = _km_decrypt_x25519_priv
 _KM._decrypt_pq_priv            = _km_decrypt_pq_priv
-_KM._load_or_create_signing     = _km_load_or_create_signing  
-_KM._decrypt_sig_priv           = _km_decrypt_sig_priv        
+_KM._load_or_create_signing     = _km_load_or_create_signing   # <-- ENV version
+_KM._decrypt_sig_priv           = _km_decrypt_sig_priv         # <-- ENV version
 _KM.sign_blob                   = _km_sign
 _KM.verify_blob                 = _km_verify
 
@@ -1880,658 +1858,107 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
 registration_enabled = True
 
 try:
-    quantum_hazard_scan  
+    quantum_hazard_scan  # type: ignore[name-defined]
 except NameError:
-    quantum_hazard_scan = None 
+    quantum_hazard_scan = None  # fallback when module not present
 
 def create_tables():
     if not DB_FILE.exists():
-        DB_FILE.parent.mkdir(parents=True, exist_ok=True)
         DB_FILE.touch(mode=0o600)
 
-    with sqlite3.connect(DB_FILE, timeout=30.0, isolation_level=None) as db:
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA synchronous=NORMAL")
-        db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA secure_delete=ON")
-        db.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        db.execute("PRAGMA temp_store=MEMORY")
-        db.execute("PRAGMA mmap_size=134217728")
-        db.execute("PRAGMA cache_size=-64000")
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
 
-        cur = db.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                is_admin BOOLEAN DEFAULT 0,
+                preferred_model TEXT DEFAULT 'openai'
+            )
+        """)
 
-        # ABSOLUTELY CRITICAL: Add REGEXP support to SQLite
-        def regexp(expr, item):
-            import re
-            if item is None:
-                return False
-            return re.match(expr, str(item), re.IGNORECASE) is not None
-        db.create_function("REGEXP", 2, regexp)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hazard_reports (
+                id INTEGER PRIMARY KEY,
+                latitude TEXT,
+                longitude TEXT,
+                street_name TEXT,
+                vehicle_type TEXT,
+                destination TEXT,
+                result TEXT,
+                cpu_usage TEXT,
+                ram_usage TEXT,
+                quantum_results TEXT,
+                user_id INTEGER,
+                timestamp TEXT,
+                risk_level TEXT,
+                model_used TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
 
-        # Helper for FTS5 decryption
-        def blog_decrypt(x):
-            return decrypt_data(x) or ""
-        db.create_function("blog_decrypt", 1, blog_decrypt)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
 
-        # ------------------------------------------------------------------
-        # 1. Users
-        # ------------------------------------------------------------------
-        cur.execute("""CREATE TABLE IF NOT EXISTS users(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            password TEXT NOT NULL,
-            is_admin BOOLEAN DEFAULT 0,
-            preferred_model TEXT DEFAULT 'openai',
-            created_at TEXT DEFAULT (datetime('now')),
-            last_login TEXT,
-            failed_logins INTEGER DEFAULT 0,
-            locked_until TEXT,
-            totp_secret TEXT,
-            backup_codes TEXT,
-            CONSTRAINT valid_username CHECK(username=trim(username) AND length(username)>=3)
-        )""")
+        cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)",
+                           ('registration_enabled', '1'))
 
-        # ------------------------------------------------------------------
-        # 2. Hazard reports
-        # ------------------------------------------------------------------
-        cur.execute("""CREATE TABLE IF NOT EXISTS hazard_reports(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            latitude TEXT,
-            longitude TEXT,
-            street_name TEXT,
-            vehicle_type TEXT,
-            destination TEXT,
-            result TEXT,
-            cpu_usage TEXT,
-            ram_usage TEXT,
-            quantum_results TEXT,
-            user_id INTEGER NOT NULL,
-            timestamp TEXT DEFAULT (datetime('now')),
-            risk_level TEXT,
-            model_used TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            quantum_entropy REAL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )""")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_hazard_ts ON hazard_reports(timestamp DESC)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_hazard_user ON hazard_reports(user_id)")
+        cursor.execute("PRAGMA table_info(hazard_reports)")
+        existing = {row[1] for row in cursor.fetchall()}
+        alter_map = {
+            "latitude":       "ALTER TABLE hazard_reports ADD COLUMN latitude TEXT",
+            "longitude":      "ALTER TABLE hazard_reports ADD COLUMN longitude TEXT",
+            "street_name":    "ALTER TABLE hazard_reports ADD COLUMN street_name TEXT",
+            "vehicle_type":   "ALTER TABLE hazard_reports ADD COLUMN vehicle_type TEXT",
+            "destination":    "ALTER TABLE hazard_reports ADD COLUMN destination TEXT",
+            "result":         "ALTER TABLE hazard_reports ADD COLUMN result TEXT",
+            "cpu_usage":      "ALTER TABLE hazard_reports ADD COLUMN cpu_usage TEXT",
+            "ram_usage":      "ALTER TABLE hazard_reports ADD COLUMN ram_usage TEXT",
+            "quantum_results":"ALTER TABLE hazard_reports ADD COLUMN quantum_results TEXT",
+            "risk_level":     "ALTER TABLE hazard_reports ADD COLUMN risk_level TEXT",
+            "model_used":     "ALTER TABLE hazard_reports ADD COLUMN model_used TEXT",
+        }
+        for col, alter_sql in alter_map.items():
+            if col not in existing:
+                cursor.execute(alter_sql)
 
-        # ------------------------------------------------------------------
-        # 3. Blog posts — with working REGEXP constraint
-        # ------------------------------------------------------------------
-        cur.execute("""CREATE TABLE IF NOT EXISTS blog_posts(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            slug TEXT NOT NULL UNIQUE,
-            title_enc TEXT NOT NULL,
-            content_enc TEXT NOT NULL,
-            summary_enc TEXT,
-            tags_enc TEXT,
-            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published','archived')),
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            author_id INTEGER NOT NULL,
-            sig_alg TEXT,
-            sig_pub_fp8 TEXT,
-            sig_val BLOB,
-            view_count INTEGER DEFAULT 0,
-            reading_time_min INTEGER,
-            version INTEGER DEFAULT 1,
-            canonical_slug TEXT,
-            FOREIGN KEY(author_id) REFERENCES users(id) ON DELETE CASCADE,
-            CONSTRAINT valid_slug CHECK(slug=lower(slug) AND slug REGEXP '^[a-z0-9]+(-[a-z0-9]+)*$')
-        )""")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_status_created ON blog_posts(status,created_at DESC)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_updated ON blog_posts(updated_at DESC)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_blog_slug ON blog_posts(slug)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                user_id INTEGER,
+                request_count INTEGER DEFAULT 0,
+                last_request_time TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
 
-        # ------------------------------------------------------------------
-        # 4. Tags system
-        # ------------------------------------------------------------------
-        cur.execute("""CREATE TABLE IF NOT EXISTS blog_tags(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tag TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            post_count INTEGER DEFAULT 0,
-            first_used TEXT,
-            last_used TEXT
-        )""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS blog_post_tags(
-            post_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(post_id,tag_id),
-            FOREIGN KEY(post_id) REFERENCES blog_posts(id) ON DELETE CASCADE,
-            FOREIGN KEY(tag_id) REFERENCES blog_tags(id) ON DELETE CASCADE
-        )""")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                is_used BOOLEAN DEFAULT 0
+            )
+        """)
 
-        # ------------------------------------------------------------------
-        # 5. System tables
-        # ------------------------------------------------------------------
-        cur.execute("""CREATE TABLE IF NOT EXISTS config(
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT DEFAULT (datetime('now')),
-            updated_by INTEGER,
-            FOREIGN KEY(updated_by) REFERENCES users(id)
-        )""")
-        for k, v in {
-            "registration_enabled": "1",
-            "site_name": "QRS+ Quantum Scanner",
-            "site_description": "Post-quantum encrypted hazard & research platform",
-            "default_theme": "dark",
-            "maintenance_mode": "0",
-            "blog_comments_enabled": "0",
-            "analytics_enabled": "0"
-        }.items():
-            cur.execute("INSERT OR IGNORE INTO config(key,value) VALUES(?,?)", (k, v))
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entropy_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pass_num INTEGER NOT NULL,
+                log TEXT NOT NULL,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-        cur.execute("""CREATE TABLE IF NOT EXISTS rate_limits(
-            user_id INTEGER PRIMARY KEY,
-            request_count INTEGER DEFAULT 0,
-            window_start TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )""")
-
-        cur.execute("""CREATE TABLE IF NOT EXISTS invite_codes(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            code TEXT NOT NULL UNIQUE,
-            created_at TEXT DEFAULT (datetime('now')),
-            created_by INTEGER,
-            used_at TEXT,
-            used_by INTEGER,
-            is_used BOOLEAN DEFAULT 0,
-            FOREIGN KEY(created_by) REFERENCES users(id),
-            FOREIGN KEY(used_by) REFERENCES users(id)
-        )""")
-
-        cur.execute("""CREATE TABLE IF NOT EXISTS user_sessions(
-            id TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            created_at TEXT DEFAULT (datetime('now')),
-            last_seen TEXT DEFAULT (datetime('now')),
-            ip_address TEXT,
-            user_agent TEXT,
-            revoked BOOLEAN DEFAULT 0,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        )""")
-
-        cur.execute("""CREATE TABLE IF NOT EXISTS audit_log(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT DEFAULT (datetime('now')),
-            actor TEXT NOT NULL,
-            actor_id INTEGER,
-            event TEXT NOT NULL,
-            target TEXT,
-            target_id INTEGER,
-            data TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            signature BLOB,
-            prev_hash TEXT
-        )""")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(timestamp DESC)")
-
-        # ------------------------------------------------------------------
-        # 6. Full-text search (FTS5) — safe
-        # ------------------------------------------------------------------
-        cur.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS blog_fts USING fts5(
-            title, content, summary, tags, slug,
-            content='blog_posts',
-            content_rowid='id',
-            tokenize='unicode61'
-        )""")
-
-        # Triggers
-        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_fts_insert
-            AFTER INSERT ON blog_posts
-            BEGIN
-                INSERT INTO blog_fts(rowid, title, content, summary, tags, slug)
-                VALUES (
-                    new.id,
-                    blog_decrypt(new.title_enc),
-                    blog_decrypt(new.content_enc),
-                    blog_decrypt(new.summary_enc),
-                    blog_decrypt(new.tags_enc),
-                    new.slug
-                );
-            END""")
-
-        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_fts_update
-            AFTER UPDATE ON blog_posts
-            BEGIN
-                INSERT INTO blog_fts(blog_fts, rowid, title, content, summary, tags, slug)
-                VALUES('delete', old.id,
-                    blog_decrypt(old.title_enc),
-                    blog_decrypt(old.content_enc),
-                    blog_decrypt(old.summary_enc),
-                    blog_decrypt(old.tags_enc),
-                    old.slug);
-                INSERT INTO blog_fts(rowid, title, content, summary, tags, slug)
-                VALUES (
-                    new.id,
-                    blog_decrypt(new.title_enc),
-                    blog_decrypt(new.content_enc),
-                    blog_decrypt(new.summary_enc),
-                    blog_decrypt(new.tags_enc),
-                    new.slug
-                );
-            END""")
-
-        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_fts_delete
-            AFTER DELETE ON blog_posts
-            BEGIN
-                INSERT INTO blog_fts(blog_fts, rowid, title, content, summary, tags, slug)
-                VALUES('delete', old.id,
-                    blog_decrypt(old.title_enc),
-                    blog_decrypt(old.content_enc),
-                    blog_decrypt(old.summary_enc),
-                    blog_decrypt(old.tags_enc),
-                    old.slug);
-            END""")
-
-        # Timestamp trigger
-        cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_update_time
-            AFTER UPDATE ON blog_posts
-            FOR EACH ROW
-            BEGIN
-                UPDATE blog_posts SET updated_at = datetime('now') WHERE id = OLD.id;
-            END""")
-
-        # Final cleanup
-        db.execute("PRAGMA optimize")
-        db.execute("PRAGMA integrity_check")
         db.commit()
 
-    print("Quantum-hardened database schema initialized — REGEXP fixed, FTS safe, all systems operational.")
-
-      
-
-        
-# ————————————————————————————————————————————————
-# ULTIMATE QUANTUM VAULT — FINAL 5 FUNCTIONS
-# FULL SRI + CSRF + PARAMETERIZED SQL
-# ————————————————————————————————————————————————
-
-@app.route("/admin/blog")
-def admin_quantum_vault_control():
-    if not session.get("is_admin"):
-        abort(403)
-
-    with sqlite3.connect(DB_FILE) as db:
-        db.row_factory = sqlite3.Row
-        posts = db.execute("""
-            SELECT id, slug, title_enc, content_enc, summary_enc, tags_enc, 
-                   status, created_at, updated_at, sig_alg 
-            FROM blog_posts 
-            ORDER BY updated_at DESC 
-            LIMIT 5000
-        """).fetchall()
-
-    # Decrypt in Python
-    decrypted_posts = []
-    for p in posts:
-        decrypted_posts.append({
-            "id": p["id"],
-            "slug": p["slug"],
-            "title": blog_decrypt(p["title_enc"]),
-            "content": blog_decrypt(p["content_enc"]),
-            "summary": blog_decrypt(p["summary_enc"]),
-            "tags": blog_decrypt(p["tags_enc"]),
-            "status": p["status"],
-            "created_at": p["created_at"],
-            "updated_at": p["updated_at"],
-            "sig_alg": p["sig_alg"]
-        })
-
-    accent = colorsync.sample().get("hex", "#49c2ff")
-    epoch = colorsync.sample().get("epoch", "000000")
-
-    total = len(decrypted_posts)
-    published = sum(1 for p in decrypted_posts if p["status"] == "published")
-
-    return render_template_string(f'''
-<!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
-<head>
-<meta charset="utf-8">
-<title>ROOT VAULT CONTROL — QRS+</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-
-<link href="{url_for('static',filename='css/bootstrap.min.css')}" rel="stylesheet"
-      integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/orbitron.css')}" rel="stylesheet"
-      integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/roboto.css')}" rel="stylesheet"
-      integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-
-<style>
-  :root{{
-    --bg:#060914;--glass:#ffffff06;--stroke:#ffffff0d;--text:#d0f8ff;--sub:#88e0ff;
-    --accent:{accent};--halo:color-mix(in oklab,var(--accent)70%,transparent);
-    --glow:color-mix(in oklab,var(--accent)60%,#000);
-  }}
-  body,html{{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:'Roboto Mono',monospace;overflow-x:hidden}}
-  .nebula{{position:fixed;inset:0;pointer-events:none;background:
-    radial-gradient(2400px at 2% 5%,var(--halo),transparent 60%),
-    radial-gradient(3000px at 98% 95%,var(--halo),transparent 64%);
-    opacity:1;filter:blur(220px);animation:drift 200s infinite alternate}}
-  @keyframes drift{{from{{transform:translate(-14%,-14%)}}to{{transform:translate(14%,14%)}}}}
-  .glass{{background:var(--glass);backdrop-filter:blur(56px);border:1px solid var(--stroke);border-radius:64px}}
-  .orbitron{{font-family:'Orbitron',monospace;letter-spacing:5px}}
-  .ultra-glow{{text-shadow:0 0 200px var(--halo),0 0 400px var(--glow)}}
-  .pulse-infinite{{animation:pulse-infinite 12s infinite}}
-  @keyframes pulse-infinite{{0%,100%{{box-shadow:0 0 100px var(--glow)}}50%{{box-shadow:0 0 300px var(--glow)}}}}
-  .btn-titan{{background:var(--accent);color:#000;font-weight:900;padding:28px 80px;border:none;border-radius:56px;
-               font-size:2rem;letter-spacing:4px;box-shadow:0 40px 120px var(--glow);transition:all .8s}}
-  .btn-titan:hover{{transform:scale(1.18);box-shadow:0 80px 240px var(--glow)}}
-</style>
-</head>
-<body>
-
-<div class="nebula"></div>
-
-<nav class="navbar navbar-dark fixed-top glass border-bottom border-white border-opacity-10" style="backdrop-filter:blur(50px)">
-  <div class="container-fluid">
-    <div class="d-flex align-items-center gap-8">
-      <span class="orbitron fs-1 ultra-glow">ROOT VAULT CONTROL</span>
-      <span class="badge bg-dark px-6 py-3 fs-4">EPOCH {epoch}</span>
-    </div>
-    <div class="ms-auto">
-      <a href="{url_for('admin_blog_new')}" class="btn btn-titan pulse-infinite">DEPLOY NEW TRANSMISSION</a>
-    </div>
-  </div>
-</nav>
-
-<main class="container py-5" style="padding-top:200px">
-  <h1 class="orbitron display-1 text-center ultra-glow mb-12" style="font-size:9rem;background:linear-gradient(90deg,var(--accent),#88f0ff,var(--accent));
-       -webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:16px">
-    VAULT CONTROL
-  </h1>
-
-  <div class="row g-8">
-    {"".join(f'''
-    <div class="col-xl-6 col-xxxl-4">
-      <div class="card glass p-8 h-100">
-        <h3 class="h2 fw-bold ultra-glow mb-6" style="background:linear-gradient(90deg,var(--accent),#fff);-webkit-background-clip:text;-webkit-text-fill:transparent">
-          {p["title"] or "[CLASSIFIED]"}
-        </h3>
-        <p class="text-muted mb-6">{(p["summary"] or p["content"][:300] + "...")}</p>
-        <div class="d-flex justify-content-between align-items-center mt-auto pt-6 border-top border-white border-opacity-10">
-          <span class="badge bg-{"success" if p["status"]=="published" else "warning"} px-6 py-4 fs-4">{p["status"].upper()}</span>
-          <div>
-            <a href="{url_for('admin_blog_edit', slug=p["slug"])}" class="btn btn-outline-light btn-lg me-4">MODIFY</a>
-            <a href="{url_for('blog_view', slug=p["slug"])}" class="btn btn-titan btn-lg">VIEW</a>
-          </div>
-        </div>
-      </div>
-    </div>
-    ''' for p in decrypted_posts)}
-  </div>
-</main>
-</body>
-</html>
-    ''')
-
-
-@app.route("/admin/blog/new", methods=["GET", "POST"])
-@app.route("/admin/blog/edit/<slug>", methods=["GET", "POST"])
-def admin_quantum_log_editor(slug=None):
-    if not session.get("is_admin"):
-        abort(403)
-
-    post = None
-    if slug:
-        with sqlite3.connect(DB_FILE) as db:
-            db.row_factory = sqlite3.Row
-            row = db.execute("SELECT * FROM blog_posts WHERE slug = ? LIMIT 1", (slug,)).fetchone()
-            if row:
-                post = {
-                    "id": row["id"],
-                    "title": blog_decrypt(row["title_enc"]),
-                    "content": blog_decrypt(row["content_enc"]),
-                    "summary": blog_decrypt(row["summary_enc"]),
-                    "tags": blog_decrypt(row["tags_enc"]),
-                    "status": row["status"],
-                    "slug": row["slug"]
-                }
-
-    if request.method == "POST":
-        ok, msg, _, new_slug = blog_save(
-            post_id=post["id"] if post else None,
-            author_id=get_user_id(session["username"]),
-            title_html=request.form["title"],
-            content_html=request.form["content"],
-            summary_html=request.form.get("summary", "")[:2000],
-            tags_csv=request.form.get("tags", ""),
-            status=request.form.get("status", "draft"),
-            slug_in=request.form.get("slug") or None,
-        )
-        flash(msg, "success" if ok else "danger")
-        return redirect(url_for("blog_view", slug=new_slug) if ok else request.url)
-
-    accent = colorsync.sample().get("hex", "#49c2ff")
-    csrf_token = generate_csrf()
-
-    return render_template_string(f'''
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>{"EDIT" if post else "CREATE"} LOG — QRS+</title>
-<link href="{url_for('static',filename='css/bootstrap.min.css')}" rel="stylesheet"
-      integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/orbitron.css')}" rel="stylesheet"
-      integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/roboto.css')}" rel="stylesheet"
-      integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-
-<style>
-  :root{{--accent:{accent}}}
-  body{{background:#0b0f17;color:#fff;font-family:'Roboto Mono',monospace}}
-  .glass{{background:#ffffff12;backdrop-filter:blur(40px);border:1px solid #ffffff18;border-radius:48px;padding:4rem;max-width:1200px;margin:2rem auto}}
-  textarea,input,select{{background:transparent;border:2px solid var(--accent);color:#fff;border-radius:20px;padding:20px;font-size:1.4rem}}
-  .btn-titan{{background:var(--accent);color:#000;font-weight:900;padding:24px 80px;border:none;border-radius:48px;box-shadow:0 30px 100px var(--accent)40}}
-</style>
-</head>
-<body>
-<div class="glass">
-  <h1 class="text-center orbitron mb-8" style="font-size:5rem;background:linear-gradient(90deg,var(--accent),#88f0ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent">
-    {"CREATE" if not post else "EDIT"} TRANSMISSION
-  </h1>
-  <form method="POST">
-    <input type="hidden" name="csrf_token" value="{csrf_token}">
-    <input name="title" class="form-control form-control-lg text-center mb-5" value="{post['title'] if post else ''}" placeholder="Title" required>
-    <input name="slug" class="form-control mb-5" value="{post['slug'] if post else ''}" placeholder="slug (optional)">
-    <textarea name="content" class="form-control mb-5" rows="30" required>{post['content'] if post else ''}</textarea>
-    <textarea name="summary" class="form-control mb-5" rows="5">{post['summary'] if post else ''}</textarea>
-    <input name="tags" class="form-control mb-5" value="{post['tags'] if post else ''}" placeholder="Tags">
-    <select name="status" class="form-select mb-8">
-      <option value="draft" {"selected" if post and post['status']!='published' else ''}>Draft</option>
-      <option value="published" {"selected" if post and post['status']=='published' else ''}>Published</option>
-    </select>
-    <div class="text-center">
-      <button type="submit" class="btn btn-titan btn-lg">{"DEPLOY" if not post else "UPDATE"}</button>
-    </div>
-  </form>
-</div>
-</body>
-</html>
-    ''', post=post)
-
-
-@app.route("/admin/blog/delete/<int:post_id>", methods=["POST"])
-def admin_blog_delete(post_id):
-    if not session.get("is_admin"):
-        abort(403)
-    blog_delete(post_id)
-    flash("Transmission erased.", "success")
-    return redirect(url_for("admin_quantum_vault_control"))
-
-
-@app.route("/blog/<slug>")
-def blog_view(slug):
-    with sqlite3.connect(DB_FILE) as db:
-        db.row_factory = sqlite3.Row
-        row = db.execute("SELECT * FROM blog_posts WHERE slug = ? LIMIT 1", (slug,)).fetchone()
-    
-    if not row or (row["status"] != "published" and not session.get("is_admin")):
-        abort(404)
-
-    post = {
-        "title": blog_decrypt(row["title_enc"]),
-        "content": blog_decrypt(row["content_enc"]),
-        "summary": blog_decrypt(row["summary_enc"]),
-        "tags": blog_decrypt(row["tags_enc"]),
-        "status": row["status"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"]
-    }
-
-    sig_ok = _verify_post(post)
-    accent = colorsync.sample().get("hex", "#49c2ff")
-
-    raw_html = markdown(post["content"] or "")
-    safe_html = cleaner.clean(raw_html)
-    safe_html_js = json.dumps(safe_html)
-
-    return render_template_string(f'''
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>{post["title"]} — QRS+</title>
-<link href="{url_for('static',filename='css/bootstrap.min.css')}" rel="stylesheet"
-      integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/orbitron.css')}" rel="stylesheet"
-      integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/roboto.css')}" rel="stylesheet"
-      integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-
-<style>
-  :root{{--accent:{accent}}}
-  body{{background:#0b0f17;color:#e0f0ff;font-family:'Roboto Mono',monospace}}
-  .glass{{background:#ffffff12;backdrop-filter:blur(40px);border:1px solid #ffffff18;border-radius:48px;padding:4rem}}
-</style>
-</head>
-<body>
-<div class="container py-5">
-  <h1 class="text-center orbitron mb-5" style="font-size:5rem;background:linear-gradient(90deg,var(--accent),#88f0ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent">
-    {post["title"]}
-  </h1>
-  <div class="text-center mb-8">
-    <span class="badge bg-{"success" if sig_ok else "danger"} px-6 py-4 fs-5">
-      {"VERIFIED" if sig_ok else "SIGNATURE FAILED"}
-    </span>
-  </div>
-  <div class="glass">
-    <div style="font-size:1.4rem;line-height:2.2">{safe_html}</div>
-  </div>
-</div>
-</body>
-</html>
-    ''', post=post, safe_html=safe_html)
-
-
-@app.route("/blog", defaults={"page": 1})
-@app.route("/blog/page/<int:page>")
-@app.route("/blog/tag/<tag>", defaults={"page": 1})
-@app.route("/blog/tag/<tag>/page/<int:page>")
-def blog_quantum_vault_index(page, tag=None):
-    per_page = 18
-    offset = (page - 1) * per_page
-
-    with sqlite3.connect(DB_FILE) as db:
-        db.row_factory = sqlite3.Row
-        if tag:
-            rows = db.execute("""
-                SELECT id, slug, title_enc, summary_enc, tags_enc, created_at, updated_at 
-                FROM blog_posts 
-                WHERE status = 'published' 
-                  AND tags_enc LIKE ? 
-                ORDER BY created_at DESC 
-                LIMIT ? OFFSET ?
-            """, (f"%{tag}%", per_page, offset)).fetchall()
-            total = db.execute("SELECT COUNT(*) FROM blog_posts WHERE status = 'published' AND tags_enc LIKE ?", (f"%{tag}%",)).fetchone()[0]
-        else:
-            rows = db.execute("""
-                SELECT id, slug, title_enc, summary_enc, tags_enc, created_at, updated_at 
-                FROM blog_posts 
-                WHERE status = 'published' 
-                ORDER BY created_at DESC 
-                LIMIT ? OFFSET ?
-            """, (per_page, offset)).fetchall()
-            total = db.execute("SELECT COUNT(*) FROM blog_posts WHERE status = 'published'").fetchone()[0]
-
-    posts = []
-    for r in rows:
-        posts.append({
-            "id": r["id"],
-            "slug": r["slug"],
-            "title": blog_decrypt(r["title_enc"]),
-            "summary": blog_decrypt(r["summary_enc"]),
-            "tags": blog_decrypt(r["tags_enc"]),
-            "created_at": r["created_at"],
-            "updated_at": r["updated_at"]
-        })
-
-    total_pages = (total + per_page - 1) // per_page
-    accent = colorsync.sample().get("hex", "#49c2ff")
-    is_admin = session.get("is_admin", False)
-    csrf_token = generate_csrf()
-
-    return render_template_string(f'''
-<!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
-<head>
-<meta charset="utf-8">
-<title>QRS+ Quantum Vault</title>
-<meta name="csrf-token" content="{csrf_token}">
-<link href="{url_for('static',filename='css/bootstrap.min.css')}" rel="stylesheet"
-      integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/orbitron.css')}" rel="stylesheet"
-      integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-<link href="{url_for('static',filename='css/roboto.css')}" rel="stylesheet"
-      integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-
-<style>
-  :root{{--accent:{accent}}}
-  body{{background:#0b0f17;color:#e0f0ff;font-family:'Roboto Mono',monospace}}
-  .glass{{background:#ffffff12;backdrop-filter:blur(40px);border:1px solid #ffffff18;border-radius:48px}}
-  .btn-titan{{background:var(--accent);color:#000;padding:20px 60px;border:none;border-radius:40px;box-shadow:0 20px 60px var(--accent)40}}
-</style>
-</head>
-<body>
-<nav class="navbar navbar-dark fixed-top glass">
-  <div class="container-fluid">
-    <a class="navbar-brand orbitron fs-3" href="{url_for('home')}">QRS+</a>
-    <div class="ms-auto d-flex gap-5">
-      {'''
-      <form method="POST" action="{url_for('admin_blog_new')}" style="display:inline">
-        <input type="hidden" name="csrf_token" value="{csrf_token}">
-        <button type="submit" class="btn btn-titan">NEW TRANSMISSION</button>
-      </form>
-      ''' if is_admin else ""}
-    </div>
-  </div>
-</nav>
-
-<main class="container py-5" style="padding-top:120px">
-  <h1 class="text-center orbitron display-1" style="background:linear-gradient(90deg,var(--accent),#88f0ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent">
-    QUANTUM VAULT
-  </h1>
-
-  <div class="row g-8 mt-12">
-    {"".join(f'''
-    <div class="col-lg-4">
-      <a href="{url_for('blog_view', slug=p['slug'])}" class="text-decoration-none text-reset">
-        <div class="glass p-8">
-          <h3>{p['title']}</h3>
-          <p>{p['summary']}</p>
-        </div>
-      </a>
-    </div>
-    ''' for p in posts)}
-  </div>
-</main>
-</body>
-</html>
-    ''')
-
-    
+    print("Database tables created and verified successfully.")
 
 
 def overwrite_hazard_reports_by_timestamp(cursor, expiration_str: str, passes: int = 7):
@@ -2843,38 +2270,24 @@ def healthz():
     return "ok", 200
 
 def delete_expired_data():
-    
     while True:
         now = datetime.now()
         expiration_time = now - timedelta(hours=EXPIRATION_HOURS)
         expiration_str = expiration_time.strftime('%Y-%m-%d %H:%M:%S')
 
         try:
-            # ========================================================
-            # 1. Open connection + RE-REGISTER REGEXP (CRITICAL!)
-            # ========================================================
-            with sqlite3.connect(DB_FILE, timeout=30.0) as db:
+            with sqlite3.connect(DB_FILE) as db:
                 cursor = db.cursor()
-
-                # This is the ONLY thing that prevents "no such function: REGEXP"
-                def regexp(expr, item):
-                    import re
-                    if item is None:
-                        return False
-                    return re.match(expr, str(item), re.IGNORECASE) is not None
-                db.create_function("REGEXP", 2, regexp)
 
                 db.execute("BEGIN")
 
-                # ----------------------------------------------------
-                # Delete expired hazard_reports
-                # ----------------------------------------------------
+
                 cursor.execute("PRAGMA table_info(hazard_reports)")
                 hazard_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in hazard_columns for col in [
-                    "latitude", "longitude", "street_name", "vehicle_type",
-                    "destination", "result", "cpu_usage", "ram_usage",
-                    "quantum_results", "risk_level", "timestamp"
+                        "latitude", "longitude", "street_name", "vehicle_type",
+                        "destination", "result", "cpu_usage", "ram_usage",
+                        "quantum_results", "risk_level", "timestamp"
                 ]):
                     cursor.execute(
                         "SELECT id FROM hazard_reports WHERE timestamp <= ?",
@@ -2885,11 +2298,14 @@ def delete_expired_data():
                     cursor.execute(
                         "DELETE FROM hazard_reports WHERE timestamp <= ?",
                         (expiration_str,))
-                    logger.debug(f"Deleted expired hazard_reports IDs: {expired_hazard_ids}")
+                    logger.debug(
+                        f"Deleted expired hazard_reports IDs: {expired_hazard_ids}"
+                    )
+                else:
+                    logger.warning(
+                        "Skipping hazard_reports: Missing required columns.")
 
-                # ----------------------------------------------------
-                # Delete expired entropy_logs
-                # ----------------------------------------------------
+
                 cursor.execute("PRAGMA table_info(entropy_logs)")
                 entropy_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in entropy_columns for col in ["id", "log", "pass_num", "timestamp"]):
@@ -2902,33 +2318,30 @@ def delete_expired_data():
                     cursor.execute(
                         "DELETE FROM entropy_logs WHERE timestamp <= ?",
                         (expiration_str,))
-                    logger.debug(f"Deleted expired entropy_logs IDs: {expired_entropy_ids}")
+                    logger.debug(
+                        f"Deleted expired entropy_logs IDs: {expired_entropy_ids}"
+                    )
+                else:
+                    logger.warning(
+                        "Skipping entropy_logs: Missing required columns.")
 
                 db.commit()
 
-            # ========================================================
-            # 2. VACUUM — now 100% safe because REGEXP exists
-            # ========================================================
             try:
-                with sqlite3.connect(DB_FILE, timeout=30.0) as vacuum_db:
-                    # Re-register REGEXP just to be extra safe
-                    def regexp_v(expr, item):
-                        import re
-                        return re.match(expr, str(item or ""), re.IGNORECASE) is not None
-                    vacuum_db.create_function("REGEXP", 2, regexp_v)
-
+                with sqlite3.connect(DB_FILE) as db:
+                    cursor = db.cursor()
                     for _ in range(3):
-                        vacuum_db.execute("VACUUM")
-                    logger.debug("Triple VACUUM completed — database is clean and optimized.")
-            except Exception as e:
-                logger.error(f"VACUUM failed (non-fatal): {e}")
+                        cursor.execute("VACUUM")
+                logger.debug("Database triple VACUUM completed with sector randomization.")
+            except sqlite3.OperationalError as e:
+                logger.error(f"VACUUM failed: {e}", exc_info=True)
 
         except Exception as e:
-            logger.error(f"Error in delete_expired_data loop: {e}", exc_info=True)
+            logger.error(f"Failed to delete expired data: {e}", exc_info=True)
 
-        # Sleep between runs — quantum entropy flows slowly
-        interval = random.randint(5400, 10800)  # 1.5–3 hours
+        interval = random.randint(5400, 10800)
         time.sleep(interval)
+
 
 def delete_user_data(user_id):
     try:
@@ -3212,53 +2625,13 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
 
     return None
 
-# ──────────────────────────────────────────────────────────────
-# 1. Accent color for the wheel (required for --accent CSS var)
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
     uid = _user_id()
-    try:
-        seed = colorsync.sample(uid)
-        return jsonify({
-            "hex": seed.get("hex", "#49c2ff"),
-            "code": seed.get("qid25", {}).get("code", "B2")
-        })
-    except Exception as e:
-        logger.error(f"Theme personalize failed: {e}")
-        # Hard fallback — wheel still works even if colorsync crashes
-        return jsonify({"hex": "#49c2ff", "code": "B2"})
+    seed = colorsync.sample(uid)
+    return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
 
 
-# 2. The actual risk data — this is what makes the wheel move
-@app.route("/api/risk/llm_guess", methods=["GET"])
-def api_llm_guess():
-    uid = _user_id()
-    sig = _system_signals(uid)
-    prompt = _build_guess_prompt(uid, sig)
-
-    data = _call_llm(prompt)  # This calls Grok
-
-    # NO LOCAL FALLBACK — if Grok is down or key missing → return error JSON
-    if not data or "harm_ratio" not in data:
-        # The frontend will show "Waiting for LLM…" forever unless we tell it something went wrong
-        return jsonify({
-            "error": "llm_unavailable",
-            "message": "Grok is currently unreachable. Check your GROK_API_KEY.",
-            "harm_ratio": 0.0,
-            "label": "OFFLINE",
-            "color": "#666666",
-            "confidence": 0.0,
-            "reasons": ["No response from Grok"],
-            "blurb": "Service temporarily unavailable."
-        }), 503
-
-    data["server_enriched"] = {
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "mode": "guess",
-        "sig": sig
-    }
-    return jsonify(data)
-    
 @app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
     uid = _user_id()
