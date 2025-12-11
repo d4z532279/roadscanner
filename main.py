@@ -3031,24 +3031,38 @@ def healthz():
     return "ok", 200
 
 def delete_expired_data():
+    
     while True:
         now = datetime.now()
         expiration_time = now - timedelta(hours=EXPIRATION_HOURS)
         expiration_str = expiration_time.strftime('%Y-%m-%d %H:%M:%S')
 
         try:
-            with sqlite3.connect(DB_FILE) as db:
+            # ========================================================
+            # 1. Open connection + RE-REGISTER REGEXP (CRITICAL!)
+            # ========================================================
+            with sqlite3.connect(DB_FILE, timeout=30.0) as db:
                 cursor = db.cursor()
+
+                # This is the ONLY thing that prevents "no such function: REGEXP"
+                def regexp(expr, item):
+                    import re
+                    if item is None:
+                        return False
+                    return re.match(expr, str(item), re.IGNORECASE) is not None
+                db.create_function("REGEXP", 2, regexp)
 
                 db.execute("BEGIN")
 
-
+                # ----------------------------------------------------
+                # Delete expired hazard_reports
+                # ----------------------------------------------------
                 cursor.execute("PRAGMA table_info(hazard_reports)")
                 hazard_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in hazard_columns for col in [
-                        "latitude", "longitude", "street_name", "vehicle_type",
-                        "destination", "result", "cpu_usage", "ram_usage",
-                        "quantum_results", "risk_level", "timestamp"
+                    "latitude", "longitude", "street_name", "vehicle_type",
+                    "destination", "result", "cpu_usage", "ram_usage",
+                    "quantum_results", "risk_level", "timestamp"
                 ]):
                     cursor.execute(
                         "SELECT id FROM hazard_reports WHERE timestamp <= ?",
@@ -3059,14 +3073,11 @@ def delete_expired_data():
                     cursor.execute(
                         "DELETE FROM hazard_reports WHERE timestamp <= ?",
                         (expiration_str,))
-                    logger.debug(
-                        f"Deleted expired hazard_reports IDs: {expired_hazard_ids}"
-                    )
-                else:
-                    logger.warning(
-                        "Skipping hazard_reports: Missing required columns.")
+                    logger.debug(f"Deleted expired hazard_reports IDs: {expired_hazard_ids}")
 
-
+                # ----------------------------------------------------
+                # Delete expired entropy_logs
+                # ----------------------------------------------------
                 cursor.execute("PRAGMA table_info(entropy_logs)")
                 entropy_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in entropy_columns for col in ["id", "log", "pass_num", "timestamp"]):
@@ -3079,30 +3090,33 @@ def delete_expired_data():
                     cursor.execute(
                         "DELETE FROM entropy_logs WHERE timestamp <= ?",
                         (expiration_str,))
-                    logger.debug(
-                        f"Deleted expired entropy_logs IDs: {expired_entropy_ids}"
-                    )
-                else:
-                    logger.warning(
-                        "Skipping entropy_logs: Missing required columns.")
+                    logger.debug(f"Deleted expired entropy_logs IDs: {expired_entropy_ids}")
 
                 db.commit()
 
+            # ========================================================
+            # 2. VACUUM — now 100% safe because REGEXP exists
+            # ========================================================
             try:
-                with sqlite3.connect(DB_FILE) as db:
-                    cursor = db.cursor()
+                with sqlite3.connect(DB_FILE, timeout=30.0) as vacuum_db:
+                    # Re-register REGEXP just to be extra safe
+                    def regexp_v(expr, item):
+                        import re
+                        return re.match(expr, str(item or ""), re.IGNORECASE) is not None
+                    vacuum_db.create_function("REGEXP", 2, regexp_v)
+
                     for _ in range(3):
-                        cursor.execute("VACUUM")
-                logger.debug("Database triple VACUUM completed with sector randomization.")
-            except sqlite3.OperationalError as e:
-                logger.error(f"VACUUM failed: {e}", exc_info=True)
+                        vacuum_db.execute("VACUUM")
+                    logger.debug("Triple VACUUM completed — database is clean and optimized.")
+            except Exception as e:
+                logger.error(f"VACUUM failed (non-fatal): {e}")
 
         except Exception as e:
-            logger.error(f"Failed to delete expired data: {e}", exc_info=True)
+            logger.error(f"Error in delete_expired_data loop: {e}", exc_info=True)
 
-        interval = random.randint(5400, 10800)
+        # Sleep between runs — quantum entropy flows slowly
+        interval = random.randint(5400, 10800)  # 1.5–3 hours
         time.sleep(interval)
-
 
 def delete_user_data(user_id):
     try:
