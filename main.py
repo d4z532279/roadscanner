@@ -2415,57 +2415,220 @@ window.addEventListener('scroll',()=>{{
 </script>
 </body></html>
 ''', post=post, sig_ok=sig_ok, accent=accent, safe_title=safe_title, safe_summary=safe_summary, escape=escape)
-@app.route("/settings/blog",methods=["GET","POST"])
+
+@app.route("/settings/blog", methods=["GET", "POST"])
+@app.route("/blog/admin", methods=["GET", "POST"])
 def blog_admin():
-    guard=_require_admin()
-    if guard:return guard
-    form=BlogForm()
-    posts=blog_list_all_admin()
-    seed=colorsync.sample()
-    accent=seed.get("hex","#49c2ff")
-    csrf_token=generate_csrf()
+    if not session.get("is_admin"):
+        return redirect(url_for("dashboard"))
+
+    form = BlogForm()
+    posts = blog_list_all_admin()
+    seed = colorsync.sample()
+    accent = seed.get("hex", "#49c2ff")
+    csrf_token = generate_csrf()
+
     if form.validate_on_submit():
-        uid=get_user_id(session["username"])
-        ok,msg,pid,slug=blog_save(None,uid,form.title.data,form.content.data,form.summary.data or"",form.tags.data or"",form.status.data,form.slug.data or None)
-        flash(msg,"success"if ok else"danger")
-        if ok:return redirect(url_for("blog_admin"))
-    return render_template_string(f'''
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>QRS+ — Blog Admin</title>
-<meta name="csrf-token" content="{csrf_token}">
-<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-<style>:root{{--accent:{accent}}}body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
-.sidebar{{position:fixed;top:0;left:0;height:100%;width:260px;background:#0d1423;border-right:1px solid #ffffff22;padding-top:60px;overflow:auto}}
-.content{{margin-left:260px;padding:18px}}
-.card{{background:#ffffff10;border:1px solid #ffffff22;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.55)}}
-.list-item{{padding:.6rem .5rem;border-bottom:1px dashed #ffffff22;cursor:pointer}}
-.list-item:hover{{background:#ffffff10}}
-.list-item.active{{background:color-mix(in oklab,var(--accent)16%,transparent)}}
-.btn-acc{{background:linear-gradient(135deg,color-mix(in oklab,var(--accent)70%,#7ae6ff),color-mix(in oklab,var(--accent)50%,#2bd1ff));border:0;color:#07121f;font-weight:900}}
-.editor{{min-height:300px;border-radius:12px;border:1px solid #ffffff22;background:#0d1423;padding:12px}}
-</style></head><body>
-<nav class="navbar navbar-dark fixed-top px-3"><a class="navbar-brand" href="{{url_for('home')}}">QRS+</a>
-<div class="d-flex gap-3"><a class="nav-link" href="{{url_for('dashboard')}}">Dashboard</a><span class="badge bg-light text-dark">Blog Admin</span></div></nav>
-<div class="sidebar"><div class="p-3"><h5>Posts</h5><div id="postList" class="card">
-{"".join(f'<div class="list-item" data-id="{p["id"]}"><strong>{p["title"]or"(untitled)"}</strong><span class="badge bg-secondary float-end">{p["status"]}</span><div class="text-muted small">{p["updated_at"]} • {p["slug"]}</div></div>'for p in posts)}
-</div></div></div>
-<div class="content"><div class="card p-4"><form method="POST">{form.hidden_tag()}
-<div class="row g-3"><div class="col-12 col-lg-8">{form.title.label}{form.title(class="form-control")}</div>
-<div class="col-8 col-lg-3">{form.slug.label}{form.slug(class="form-control",placeholder="auto")}</div>
-<div class="col-4 col-lg-1">{form.status.label}{form.status(class="form-select")}</div>
-<div class="col-12">{form.summary.label}{form.summary(class="form-control",rows=4)}</div>
-<div class="col-12">{form.content.label}{form.content(class="form-control",rows=15)}</div>
-<div class="col-12 col-md-8">{form.tags.label}{form.tags(class="form-control")}</div>
-<div class="col-12 col-md-4 d-flex gap-2">{form.submit(class="btn btn-acc w-100")}</div></div></form></div></div>
-<script src="{{url_for('static',filename='js/jquery.min.js')}}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+        uid = get_user_id(session["username"])
+        ok, msg, pid, slug = blog_save(
+            None,
+            uid,
+            form.title.data,
+            form.content.data,
+            form.summary.data or "",
+            form.tags.data or "",
+            form.status.data,
+            form.slug.data or None,
+        )
+        flash(msg, "success" if ok else "danger")
+        if ok:
+            return redirect(url_for("blog_admin"))
+
+    # Pure Jinja2 — no f-string parsing hell
+    BLOG_ADMIN_TEMPLATE = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QRS+ — Blog Admin</title>
+<meta name="csrf-token" content="{{ csrf_token }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+<link href="{{ url_for('static',filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+<link href="{{ url_for('static',filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+<style>
+:root{--accent:{{ accent }}}
+body{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}
+.sidebar{position:fixed;top:0;left:0;height:100%;width:260px;background:#0d1423;border-right:1px solid #ffffff22;padding-top:60px;overflow:auto}
+.content{margin-left:260px;padding:18px}
+.card{background:#ffffff10;border:1px solid #ffffff22;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.list-item{padding:.6rem .5rem;border-bottom:1px dashed #ffffff22;cursor:pointer}
+.list-item:hover{background:#ffffff10}
+.list-item.active{background:color-mix(in oklab,var(--accent)16%,transparent)}
+.btn-acc{background:linear-gradient(135deg,color-mix(in oklab,var(--accent)70%,#7ae6ff),color-mix(in oklab,var(--accent)50%,#2bd1ff));border:0;color:#07121f;font-weight:900}
+.editor{min-height:300px;border-radius:12px;border:1px solid #ffffff22;background:#0d1423;padding:12px}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-dark fixed-top px-3">
+  <a class="navbar-brand" href="{{ url_for('home') }}">QRS+</a>
+  <div class="d-flex gap-3">
+    <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
+    <span class="badge bg-light text-dark">Blog Admin</span>
+  </div>
+</nav>
+
+<div class="sidebar">
+  <div class="p-3">
+    <h5>Posts</h5>
+    <button class="btn btn-sm btn-acc mb-2 w-100" id="btnNew">New Post</button>
+    <div id="postList" class="card">
+      {% for p in posts %}
+      <div class="list-item" data-id="{{ p.id }}">
+        <strong>{{ p.title or "(untitled)" }}</strong>
+        <span class="badge bg-secondary float-end">{{ p.status }}</span>
+        <div class="text-muted small">{{ p.updated_at }} • {{ p.slug }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="content">
+  <div class="card p-4">
+    <form method="POST" id="blogForm">
+      {{ form.hidden_tag() }}
+      <input type="hidden" name="id" id="postId">
+      <div class="row g-3">
+        <div class="col-12 col-lg-8">
+          {{ form.title.label }}
+          {{ form.title(class_="form-control") }}
+        </div>
+        <div class="col-8 col-lg-3">
+          {{ form.slug.label }}
+          {{ form.slug(class_="form-control", placeholder="auto") }}
+        </div>
+        <div class="col-4 col-lg-1">
+          {{ form.status.label }}
+          {{ form.status(class_="form-select") }}
+        </div>
+        <div class="col-12">
+          {{ form.summary.label }}
+          {{ form.summary(class_="form-control", rows=4) }}
+        </div>
+        <div class="col-12">
+          {{ form.content.label }}
+          {{ form.content(class_="form-control", rows=18) }}
+        </div>
+        <div class="col-12 col-md-8">
+          {{ form.tags.label }}
+          {{ form.tags(class_="form-control") }}
+        </div>
+        <div class="col-12 col-md-4 d-flex gap-2">
+          {{ form.submit(class_="btn btn-acc w-100") }}
+          <button type="button" class="btn btn-danger w-100" id="btnDelete" disabled>Delete</button>
+        </div>
+        <div id="msg" class="col-12 text-muted mt-3"></div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="{{ url_for('static',filename='js/jquery.min.js') }}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
 <script>
-const CSRF='{csrf_token}';
-async function load(id){$('.list-item').removeClass('active');$(`.list-item[data-id="${id}"]`).addClass('active');
-const r=await fetch(`/admin/blog/api/post/${id}`);const j=await r.json();
-$('#id').val(j.id);$('#title').val(j.title);$('#slug').val(j.slug);$('#status').val(j.status);
-$('#summary').val(j.summary);$('#content').val(j.content);$('#tags').val(j.tags);}
-$('.list-item').click(function(){{load($(this).data('id'));}});
-</script></body></html>
-''',form=form,posts=posts,csrf_token=csrf_token,accent=accent)
+const CSRF = "{{ csrf_token }}";
+function msg(t,o){$('#msg').text(t).css('color',o?'#8bd346':'#ff6a6a');}
+async function load(id){
+  $('.list-item').removeClass('active');
+  $(`.list-item[data-id="${id}"]`).addClass('active');
+  msg('Loading...');
+  const r = await fetch(`/admin/blog/api/post/${id}`);
+  const j = await r.json();
+  $('#postId').val(j.id);
+  $('#title').val(j.title);
+  $('#slug').val(j.slug);
+  $('#status').val(j.status);
+  $('#summary').val(j.summary);
+  $('#content').val(j.content);
+  $('#tags').val(j.tags);
+  $('#btnDelete').prop('disabled', !j.id);
+  msg('Loaded', true);
+}
+async function save(){
+  msg('Saving...');
+  const p = {
+    id: $('#postId').val() || null,
+    title: $('#title').val(),
+    slug: $('#slug').val(),
+    status: $('#status').val(),
+    summary: $('#summary').val(),
+    content: $('#content').val(),
+    tags: $('#tags').val()
+  };
+  const r = await fetch('/admin/blog/api/save', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+    body:JSON.stringify(p)
+  });
+  const j = await r.json();
+  if(r.ok && j.ok){
+    $('#postId').val(j.id);
+    $('#slug').val(j.slug);
+    $('#btnDelete').prop('disabled',false);
+    await refresh(j.id);
+    msg(j.msg || 'Saved', true);
+  } else msg(j.msg || 'Failed');
+}
+async function delPost(){
+  if(!confirm('Delete permanently?')) return;
+  const id = $('#postId').val();
+  if(!id) return;
+  const r = await fetch('/admin/blog/api/delete', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+    body:JSON.stringify({id:Number(id)})
+  });
+  const j = await r.json();
+  if(r.ok && j.ok){
+    refresh();
+    $('#postId').val('');
+    $('#btnDelete').prop('disabled',true);
+    msg('Deleted', true);
+  }
+}
+async function refresh(sel){
+  const r = await fetch('/admin/blog/api/posts');
+  const j = await r.json();
+  $('#postList').empty();
+  j.posts.forEach(p=>{
+    const d=$('<div class="list-item">').attr('data-id',p.id).html(
+      `<strong>${p.title||'(untitled)'}</strong><span class="badge bg-secondary float-end">${p.status}</span><div class="text-muted small">${p.updated_at} • ${p.slug}</div>`
+    );
+    d.click(()=>load(p.id));
+    $('#postList').append(d);
+  });
+  if(sel) $(`.list-item[data-id="${sel}"]`).addClass('active');
+}
+$('#btnNew').click(()=>{
+  $('.list-item').removeClass('active');
+  $('#postId').val('');
+  $('#btnDelete').prop('disabled',true);
+  $('#blogForm')[0].reset();
+  msg('New post');
+});
+$('#btnDelete').click(delPost);
+$('#blogForm').on('submit',e=>{e.preventDefault();save();});
+$('.list-item').click(function(){load($(this).data('id'));});
+refresh();
+</script>
+</body>
+</html>"""
+
+    return render_template_string(
+        BLOG_ADMIN_TEMPLATE,
+        form=form,
+        posts=posts,
+        csrf_token=csrf_token,
+        accent=accent
+    )
 
 @app.get("/admin/blog/api/posts")
 def blog_api_posts():
@@ -2515,75 +2678,7 @@ def blog_admin_redirect():
     if guard:return guard
     return redirect(url_for("blog_admin"))
 
-@app.route("/settings/blog",methods=["GET","POST"])
-def blog_admin():
-    guard=_require_admin()
-    if guard:return guard
-    form=BlogForm()
-    posts=blog_list_all_admin()
-    seed=colorsync.sample()
-    accent=seed.get("hex","#49c2ff")
-    csrf_token=generate_csrf()
-    if form.validate_on_submit():
-        uid=get_user_id(session["username"])
-        ok,msg,pid,slug=blog_save(None,uid,form.title.data,form.content.data,form.summary.data or"",form.tags.data or"",form.status.data,form.slug.data or None)
-        flash(msg,"success"if ok else"danger")
-        if ok:return redirect(url_for("blog_admin"))
-    return render_template_string(f'''
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>QRS+ — Blog Admin</title>
-<meta name="csrf-token" content="{csrf_token}">
-<link rel="stylesheet" href="{{url_for('static',filename='css/bootstrap.min.css')}}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-<link href="{{url_for('static',filename='css/roboto.css')}}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-<link href="{{url_for('static',filename='css/orbitron.css')}}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-<style>:root{{--accent:{accent}}}body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
-.sidebar{{position:fixed;top:0;left:0;height:100%;width:260px;background:#0d1423;border-right:1px solid #ffffff22;padding-top:60px;overflow:auto}}
-.content{{margin-left:260px;padding:18px}}
-.card{{background:#ffffff10;border:1px solid #ffffff22;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.55)}}
-.list-item{{padding:.6rem .5rem;border-bottom:1px dashed #ffffff22;cursor:pointer}}
-.list-item:hover{{background:#ffffff10}}
-.list-item.active{{background:color-mix(in oklab,var(--accent)16%,transparent)}}
-.btn-acc{{background:linear-gradient(135deg,color-mix(in oklab,var(--accent)70%,#7ae6ff),color-mix(in oklab,var(--accent)50%,#2bd1ff));border:0;color:#07121f;font-weight:900}}
-.editor{{min-height:300px;border-radius:12px;border:1px solid #ffffff22;background:#0d1423;padding:12px}}
-</style></head><body>
-<nav class="navbar navbar-dark fixed-top px-3"><a class="navbar-brand" href="{{url_for('home')}}">QRS+</a>
-<div class="d-flex gap-3"><a class="nav-link" href="{{url_for('dashboard')}}">Dashboard</a><span class="badge bg-light text-dark">Blog Admin</span></div></nav>
-<div class="sidebar"><div class="p-3"><h5>Posts</h5><button class="btn btn-sm btn-acc mb-2 w-100" id="btnNew">New Post</button>
-<div id="postList" class="card">{"".join(f'<div class="list-item" data-id="{p["id"]}"><strong>{p["title"]or"(untitled)"}</strong><span class="badge bg-secondary float-end">{p["status"]}</span><div class="text-muted small">{p["updated_at"]} • {p["slug"]}</div></div>'for p in posts)}</div></div></div>
-<div class="content"><div class="card p-4"><form method="POST">{form.hidden_tag()}
-<input type="hidden" name="id" id="postId">
-<div class="row g-3"><div class="col-12 col-lg-8">{form.title.label}{form.title(class="form-control")}</div>
-<div class="col-8 col-lg-3">{form.slug.label}{form.slug(class="form-control",placeholder="auto")}</div>
-<div class="col-4 col-lg-1">{form.status.label}{form.status(class="form-select")}</div>
-<div class="col-12">{form.summary.label}{form.summary(class="form-control",rows=4)}</div>
-<div class="col-12">{form.content.label}{form.content(class="form-control",rows=18)}</div>
-<div class="col-12 col-md-8">{form.tags.label}{form.tags(class="form-control")}</div>
-<div class="col-12 col-md-4 d-flex gap-2">{form.submit(class="btn btn-acc w-100")}<button type="button" class="btn btn-danger w-100" id="btnDelete" disabled>Delete</button></div>
-<div id="msg" class="col-12 text-muted mt-3"></div></div></form></div></div>
-<script src="{{url_for('static',filename='js/jquery.min.js')}}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-<script>
-const CSRF='{csrf_token}';
-function msg(t,o){$('#msg').text(t).css('color',o?'#8bd346':'#ff6a6a');}
-async function load(id){$('.list-item').removeClass('active');$(`.list-item[data-id="${id}"]`).addClass('active');msg('Loading...');
-const r=await fetch(`/admin/blog/api/post/${id}`);const j=await r.json();
-$('#postId').val(j.id);$('#title').val(j.title);$('#slug').val(j.slug);$('#status').val(j.status);
-$('#summary').val(j.summary);$('#content').val(j.content);$('#tags').val(j.tags);
-$('#btnDelete').prop('disabled',!j.id);msg('Loaded',true);}
-async function save(){msg('Saving...');const p={{id:$('#postId').val()||null,title:$('#title').val(),slug:$('#slug').val(),
-status:$('#status').val(),summary:$('#summary').val(),content:$('#content').val(),tags:$('#tags').val()}};
-const r=await fetch('/admin/blog/api/save',{{method:'POST',headers:{{'Content-Type':'application/json','X-CSRFToken':CSRF}},body:JSON.stringify(p)}});
-const j=await r.json();if(r.ok&&j.ok){$('#postId').val(j.id);$('#slug').val(j.slug);$('#btnDelete').prop('disabled',false);await refresh(j.id);msg(j.msg||'Saved',true);}else msg(j.msg||'Failed');}
-async function delPost(){if(!confirm('Delete permanently?'))return;const id=$('#postId').val();if(!id)return;
-const r=await fetch('/admin/blog/api/delete',{{method:'POST',headers:{{'Content-Type':'application/json','X-CSRFToken':CSRF}},body:JSON.stringify({{id:Number(id)}})}});
-const j=await r.json();if(r.ok&&j.ok){refresh();$('#postId').val('');$('#btnDelete').prop('disabled',true);msg('Deleted',true);}}
-async function refresh(sel){const r=await fetch('/admin/blog/api/posts');const j=await r.json();$('#postList').empty();
-j.posts.forEach(p=>{const d=$('<div class="list-item">').attr('data-id',p.id).html(`<strong>${p.title||'(untitled)'}</strong><span class="badge bg-secondary float-end">${p.status}</span><div class="text-muted small">${p.updated_at} • ${p.slug}</div>`);
-d.click(()=>load(p.id));$('#postList').append(d);});if(sel)$(`.list-item[data-id="${sel}"]`).addClass('active');}
-$('#btnNew').click(()=>{$('.list-item').removeClass('active');$('#postId').val('');$('#btnDelete').prop('disabled',true);$('#blogForm')[0].reset();msg('New post');});
-$('#btnDelete').click(delPost);$('#blogForm').on('submit',e=>{e.preventDefault();save();});
-$('.list-item').click(function(){{load($(this).data('id'));}});refresh();
-</script>
-</body></html>
-''',form=form,posts=posts,csrf_token=csrf_token,accent=accent)
+
 def overwrite_hazard_reports_by_timestamp(cursor, expiration_str: str, passes: int = 7):
     col_types = [
         ("latitude","TEXT"), ("longitude","TEXT"), ("street_name","TEXT"),
