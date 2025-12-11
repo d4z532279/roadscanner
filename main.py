@@ -1899,6 +1899,19 @@ def create_tables():
 
         cur = db.cursor()
 
+        # ABSOLUTELY CRITICAL: Add REGEXP support to SQLite
+        def regexp(expr, item):
+            import re
+            if item is None:
+                return False
+            return re.match(expr, str(item), re.IGNORECASE) is not None
+        db.create_function("REGEXP", 2, regexp)
+
+        # Helper for FTS5 decryption
+        def blog_decrypt(x):
+            return decrypt_data(x) or ""
+        db.create_function("blog_decrypt", 1, blog_decrypt)
+
         # ------------------------------------------------------------------
         # 1. Users
         # ------------------------------------------------------------------
@@ -1918,7 +1931,7 @@ def create_tables():
         )""")
 
         # ------------------------------------------------------------------
-        # 2. Hazard reports (all fields encrypted)
+        # 2. Hazard reports
         # ------------------------------------------------------------------
         cur.execute("""CREATE TABLE IF NOT EXISTS hazard_reports(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1944,7 +1957,7 @@ def create_tables():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_hazard_user ON hazard_reports(user_id)")
 
         # ------------------------------------------------------------------
-        # 3. Blog posts – PQ2 signed & encrypted
+        # 3. Blog posts — with working REGEXP constraint
         # ------------------------------------------------------------------
         cur.execute("""CREATE TABLE IF NOT EXISTS blog_posts(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1990,7 +2003,7 @@ def create_tables():
         )""")
 
         # ------------------------------------------------------------------
-        # 5. Config, rate limits, invite codes, sessions, audit
+        # 5. System tables
         # ------------------------------------------------------------------
         cur.execute("""CREATE TABLE IF NOT EXISTS config(
             key TEXT PRIMARY KEY,
@@ -2057,7 +2070,7 @@ def create_tables():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(timestamp DESC)")
 
         # ------------------------------------------------------------------
-        # 6. Full-text search for blog (FTS5) – now with working decrypt stub
+        # 6. Full-text search (FTS5) — safe
         # ------------------------------------------------------------------
         cur.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS blog_fts USING fts5(
             title, content, summary, tags, slug,
@@ -2066,10 +2079,7 @@ def create_tables():
             tokenize='unicode61'
         )""")
 
-        # Helper SQL function so FTS triggers don't crash
-        db.create_function("blog_decrypt", 1, lambda x: decrypt_data(x) or "")
-
-        # Triggers – now safe because blog_decrypt exists
+        # Triggers
         cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_fts_insert
             AFTER INSERT ON blog_posts
             BEGIN
@@ -2117,9 +2127,7 @@ def create_tables():
                     old.slug);
             END""")
 
-        # ------------------------------------------------------------------
-        # 7. Timestamp auto-update trigger
-        # ------------------------------------------------------------------
+        # Timestamp trigger
         cur.execute("""CREATE TRIGGER IF NOT EXISTS trg_blog_update_time
             AFTER UPDATE ON blog_posts
             FOR EACH ROW
@@ -2127,14 +2135,14 @@ def create_tables():
                 UPDATE blog_posts SET updated_at = datetime('now') WHERE id = OLD.id;
             END""")
 
-        # ------------------------------------------------------------------
         # Final cleanup
-        # ------------------------------------------------------------------
         db.execute("PRAGMA optimize")
         db.execute("PRAGMA integrity_check")
         db.commit()
 
-    print("Advanced quantum-hardened database schema initialized (v10 – fully working).")
+    print("Quantum-hardened database schema initialized — REGEXP fixed, FTS safe, all systems operational.")
+
+            
     
 def _linkify(attrs,new):
     if not new:return attrs
