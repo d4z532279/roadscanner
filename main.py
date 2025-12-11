@@ -2555,11 +2555,11 @@ body{{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',sans-serif}}
     </form>
   </div>
 </div>
-
-<script src="{url_for('static', filename='js/jquery.min.js')}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
 <script>
 const CSRF = "{csrf_token}";
-function msg(t,o){$('#msg').text(t).css('color',o?'#8bd346':'#ff6a6a');}
+function msg(t,o){{
+  $('#msg').text(t).css('color',o?'#8bd346':'#ff6a6a');
+}}
 async function load(id){{
   $('.list-item').removeClass('active');
   $(`.list-item[data-id="${{id}}"]`).addClass('active');
@@ -2643,6 +2643,7 @@ $('#blogForm').on('submit',e=>{e.preventDefault();save();});
 $('.list-item').click(function(){{load($(this).data('id'));}});
 refresh();
 </script>
+
 </body>
 </html>'''
 
