@@ -86,7 +86,7 @@ except Exception:
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 try:
-    import fcntl  # POSIX-only file locking (Linux/macOS). If unavailable, we fall back gracefully.
+    import fcntl 
 except Exception:
     fcntl = None
 class SealedCache(TypedDict, total=False):
@@ -195,17 +195,16 @@ if 'parse_safe_float' not in globals():
             raise ValueError("Non-finite float not allowed")
         return f
 
-# === ENV names for key-only-in-env mode ===
-ENV_SALT_B64              = "QRS_SALT_B64"             # base64 salt for KDF (Scrypt/Argon2)
+ENV_SALT_B64              = "QRS_SALT_B64"             
 ENV_X25519_PUB_B64        = "QRS_X25519_PUB_B64"
-ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  # AESGCM(nonce|ct) b64
-ENV_PQ_KEM_ALG            = "QRS_PQ_KEM_ALG"           # e.g. "ML-KEM-768"
+ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  
+ENV_PQ_KEM_ALG            = "QRS_PQ_KEM_ALG"          
 ENV_PQ_PUB_B64            = "QRS_PQ_PUB_B64"
-ENV_PQ_PRIV_ENC_B64       = "QRS_PQ_PRIV_ENC_B64"      # AESGCM(nonce|ct) b64
-ENV_SIG_ALG               = "QRS_SIG_ALG"              # "ML-DSA-87"/"Dilithium5"/"Ed25519"
+ENV_PQ_PRIV_ENC_B64       = "QRS_PQ_PRIV_ENC_B64"      
+ENV_SIG_ALG               = "QRS_SIG_ALG"              
 ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
-ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     # AESGCM(nonce|ct) b64
-ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env) b64
+ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     
+ENV_SEALED_B64            = "QRS_SEALED_B64"           
 
 # Small b64 helpers (env <-> bytes)
 def _b64set(name: str, raw: bytes) -> None:
@@ -223,9 +222,9 @@ def _derive_kek(passphrase: str, salt: bytes) -> bytes:
     return hash_secret_raw(
         passphrase.encode("utf-8"),
         salt,
-        3,                      # time_cost
-        512 * 1024,             # memory_cost (KiB)
-        max(2, (os.cpu_count() or 2)//2),  # parallelism
+        3,                      
+        512 * 1024,             
+        max(2, (os.cpu_count() or 2)//2),  
         32,
         ArgonType.ID
     )
@@ -596,7 +595,7 @@ class KeyManager:
     sig_pub: Optional[bytes] = None
     _sig_priv_enc: Optional[bytes] = None
     sealed_store: Optional["SealedStore"] = None
-    # note: no on-disk dirs/paths anymore
+    
 
     def _oqs_kem_name(self) -> Optional[str]: ...
     def _load_or_create_hybrid_keys(self) -> None: ...
@@ -762,7 +761,7 @@ class ColorSync:
             hexc = f"#{j:06x}"
             code = rng.choice(["A1","A2","B2","C1","C2","D1","E3"])
 
-            # Convert to perceptual coordinates
+            
             h, s, l = self._rgb_to_hsl(j)
             L, C, H = _approx_oklch_from_rgb(
                 (j >> 16 & 0xFF) / 255.0,
@@ -937,7 +936,7 @@ class SealedRecord:
 
 class SealedStore:
     def __init__(self, km: "KeyManager"):
-        self.km = km  # no dirs/files created
+        self.km = km  
 
     def _derive_split_kek(self, base_kek: bytes) -> bytes:
         shards_b64 = os.getenv(SHARDS_ENV, "")
@@ -1199,7 +1198,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
     enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
 
     if not (alg and pub and enc):
-        # Need to generate keys and place into ENV
+        
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
             raise RuntimeError(f"{self.passphrase_env_var} not set")
@@ -1215,7 +1214,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         try_pq = _oqs_sig_name() if oqs is not None else None
         if try_pq:
             
-            with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
+            with oqs.Signature(try_pq) as s:  
                 pub_raw = s.generate_keypair()
                 sk_raw  = s.export_secret_key()
             n = secrets.token_bytes(12)
@@ -1858,9 +1857,9 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
 registration_enabled = True
 
 try:
-    quantum_hazard_scan  # type: ignore[name-defined]
+    quantum_hazard_scan  
 except NameError:
-    quantum_hazard_scan = None  # fallback when module not present
+    quantum_hazard_scan = None 
 
 def create_tables():
     if not DB_FILE.exists():
@@ -2215,25 +2214,50 @@ def collect_entropy(sources=None) -> int:
     return int.from_bytes(combined_entropy, 'big') % 2**512
 
 
-def fetch_entropy_logs():
+def fetch_entropy_logs(limit: Optional[int] = None) -> list[dict]:
+    
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute(
-            "SELECT encrypted_data, description, timestamp FROM entropy_logs ORDER BY id"
-        )
-        logs = cursor.fetchall()
 
-    decrypted_logs = [{
-        "encrypted_data": decrypt_data(row[0]),
-        "description": row[1],
-        "timestamp": row[2]
-    } for row in logs]
+        sql = "SELECT id, pass_num, log, timestamp FROM entropy_logs ORDER BY id"
+        params: tuple[Any, ...] = ()
+        if limit is not None:
+            
+            sql = "SELECT id, pass_num, log, timestamp FROM entropy_logs ORDER BY id DESC LIMIT ?"
+            params = (int(limit),)
 
-    return decrypted_logs
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+
+    
+    if limit is not None:
+        rows = list(reversed(rows))
+
+    logs: list[dict] = []
+    for row in rows:
+        _id, pass_num, log_raw, ts = row
+
+        
+        decrypted: Optional[str] = None
+        if isinstance(log_raw, str):
+            try:
+                decrypted = decrypt_data(log_raw)
+            except Exception:
+                decrypted = None
+
+        logs.append({
+            "id": _id,
+            "pass_num": pass_num,
+            "log": decrypted if decrypted is not None else log_raw,
+            "timestamp": ts,
+        })
+
+    return logs
+
 
 
 _BG_LOCK_PATH = os.getenv("QRS_BG_LOCK_PATH", "/tmp/qrs_bg.lock")
-_BG_LOCK_HANDLE = None  # keep process-lifetime handle
+_BG_LOCK_HANDLE = None  
 def start_background_jobs_once() -> None:
     global _BG_LOCK_HANDLE
     if getattr(app, "_bg_started", False):
@@ -2249,10 +2273,10 @@ def start_background_jobs_once() -> None:
             ok_to_start = os.environ.get("QRS_BG_STARTED") != "1"
             os.environ["QRS_BG_STARTED"] = "1"
     except Exception:
-        ok_to_start = False  # another proc owns it
+        ok_to_start = False  
 
     if ok_to_start:
-        # Only rotate the Flask session key if explicitly enabled
+        
         if os.getenv("QRS_ROTATE_SESSION_KEY", "0") == "1":
             threading.Thread(target=rotate_secret_key, daemon=True).start()
             logger.debug("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
@@ -2444,8 +2468,8 @@ def _quantum_features(cpu: float, ram: float):
     if not _qml_ready():
         return None, "unavailable"
     try:
-        probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  # le
-        # Shannon entropy (bits)
+        probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  
+        
         H = float(-(probs * np.log2(np.clip(probs, 1e-12, 1))).sum())
         idx = int(np.argmax(probs))
         peak_p = float(probs[idx])
@@ -2479,15 +2503,15 @@ def _system_signals(uid: str):
     }
     qs, qs_str = _quantum_features(out["cpu"], out["ram"])
     if qs is not None:
-        out["quantum_state"] = qs                # structured details (for logs/UI)
-        out["quantum_state_sig"] = qs_str        # <- this is your {quantum_state}
+        out["quantum_state"] = qs                
+        out["quantum_state_sig"] = qs_str        
     else:
-        out["quantum_state_sig"] = qs_str        # "unavailable"/"error"
+        out["quantum_state_sig"] = qs_str        
     return out
 
 
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
-    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  
     return f"""
 ROLE
 You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
@@ -2660,7 +2684,7 @@ def api_stream():
         for _ in range(24):
             sig = _system_signals(uid)
             prompt = _build_guess_prompt(uid, sig)
-            data = _call_llm(prompt)  # ❌ no local fallback
+            data = _call_llm(prompt)  
 
             meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
             if not data:
@@ -3997,11 +4021,11 @@ def home():
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // enforce update cadence
-  const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
+  
+  const MIN_UPDATE_MS = 60 * 1000;
   let lastApplyAt = 0;
 
-  // current state
+ 
   const current = { mode:'guess', harm:0, last:null };
 
   (async function themeSync(){
@@ -4049,7 +4073,7 @@ def home():
   
   class BreathEngine {
     constructor(){
-      this.rateHz = 0.10;  // ≈6 bpm baseline
+      this.rateHz = 0.10;  
       this.amp    = 0.55;
       this.sweep  = 0.12;
       this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
@@ -4318,7 +4342,7 @@ def login():
     <title>Login - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-    <!-- SRI kept EXACTLY the same -->
+   
     <link rel="stylesheet" href="{{ url_for('static', filename='css/orbitron.css') }}" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
           integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
@@ -4507,7 +4531,7 @@ def register():
     </style>
 </head>
 <body>
-    <!-- Navbar with Login / Register -->
+    
     <nav class="navbar navbar-expand-lg navbar-dark">
         <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
         <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav"
@@ -4571,10 +4595,9 @@ def register():
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
-    # Registration status is READ FROM ENV ONLY (REGISTRATION_ENABLED).
-    # Invite codes remain DB-backed (generate/list unchanged).
+    
 
-    import os  # local import to keep this block self-contained
+    import os  
 
     if 'is_admin' not in session or not session.get('is_admin'):
         return redirect(url_for('dashboard'))
@@ -4583,7 +4606,7 @@ def settings():
     new_invite_code = None
     form = SettingsForm()
 
-    # Read current registration status from environment
+    
     def _read_registration_from_env():
         val = os.getenv('REGISTRATION_ENABLED', 'false')
         return (val, str(val).strip().lower() in ('1', 'true', 'yes', 'on'))
@@ -4601,10 +4624,10 @@ def settings():
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
-        # Re-read env in case it changed between requests (no persistence done here)
+      
         env_val, registration_enabled = _read_registration_from_env()
 
-    # Unused invite codes remain DB-backed
+   
     invite_codes = []
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
