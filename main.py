@@ -3066,12 +3066,6 @@ def quantum_haversine_hints(
     return {"top": top, "nearest": nearest, "unknownish": unknownish, "hint_text": hint_text}
 
 
-def reverse_geocode(lat: float, lon: float, cities: Dict[str, Any]) -> str:
-    hints = quantum_haversine_hints(lat, lon, cities, top_k=1)
-    nearest = hints["nearest"]
-    if nearest:
-        return _format_locality_line(nearest)
-    return "Unknown Location"
 
 
 def approximate_country(lat: float, lon: float, cities: Dict[str, Any]) -> str:
