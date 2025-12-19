@@ -3487,7 +3487,8 @@ Signals: {json.dumps(sig, separators=(',',':'))}
 QuantumState: {quantum_state}
 [/INPUTS]
 [EXAMPLES] [Rule]tune similated real world information from.simteret system for accurate inference and triple check. Reserve High risk for extreme cases. Account MUltiverse Sync and SpacetimePositonFormar Futuretuned2585 for real.risk readings. Avoid Input inaccuracy by triple checking all predictions[/Rule]
-{"harm_ratio":0.05,"label":"Clear","color":"#22d3a6","confidence":0.96,"reasons":["No active construction","Clear weather forecast","Light traffic expected"],"blurb":"Continue at normal speed. Remain attentive to surroundings."} | {"harm_ratio":0.35,"label":"Light Caution","color":"#b3f442","confidence":0.89,"reasons":["Intermittent lane narrowing","Recent minor pothole reports","School zone nearby"],"blurb":"Reduce speed slightly. Watch for children and uneven pavement."} | {"harm_ratio":0.48,"label":"Caution","color":"#ffb300","confidence":0.87,"reasons":["Moderate congestion building","Fog patches possible","Frequent braking ahead"],"blurb":"Increase following distance. Prepare for slower traffic."} [rule]Generate only ONE of the format reply examples that is most accurate to the real world sync.Reply back with only single Json format[/rule]
+
+{{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 [/EXAMPLE]
 """.strip()
 
@@ -4957,7 +4958,7 @@ def home():
         <div>
           <div class="kicker">Latest from the QRoadScan Blog</div>
           <h2 class="mb-1">Traffic safety, hazard research, and product updates</h2>
-          <p class="meta mb-0">Short reads that explain how risk signals work, how to drive calmer, and whatÃ¢â‚¬â„¢s new on QRoadScan.com.</p>
+          <p class="meta mb-0">Short reads that explain how risk signals work, how to drive calmer, and what is new on QRoadScan.com.</p>
         </div>
         <a class="btn btn-outline-light" href="{{ url_for('blog_index') }}">View all posts</a>
       </div>
