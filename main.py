@@ -1,97 +1,112 @@
-from __future__ import annotations
-import asyncio
-import base64
-import colorsys
-import fcntl
-import hashlib
-import hmac
-import httpx
-import itertools
-import json
+remoce dupe.impoets snd organixe it 
+from __future__ import annotations 
 import logging
-import math
-import os
+import httpx
+import sqlite3
+import psutil
+from flask import (
+    Flask, render_template_string, request, redirect, url_for,
+    session, jsonify, flash, make_response, Response, stream_with_context)
+from flask_wtf import FlaskForm, CSRFProtect
+from flask_wtf.csrf import generate_csrf
+from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
+from wtforms.validators import DataRequired, Length
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.backends import default_backend
+
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from argon2.low_level import Type
+from datetime import timedelta, datetime
+from markdown2 import markdown
+import bleach
+import geonamescache
 import random
 import re
-import secrets
-import sqlite3
-import string
-import sys
+import base64
+import math
 import threading
 import time
+import hmac
+import hashlib
+import secrets
+from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, cast
 import uuid
-import zlib as _zlib
-from collections import deque
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+import asyncio
+import sys
+import pennylane as qml
+import numpy as np
 from pathlib import Path
-from typing import (
-    Any, Callable, Dict, List, Mapping, Optional, Tuple, TypedDict, Union, cast,
-)
+import os
+import json
+import string
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from argon2.low_level import hash_secret_raw, Type as ArgonType
+from numpy.random import Generator, PCG64DXSM
+import itertools
+import colorsys
+import os
+import json
+import time
+import bleach
+import logging
+import asyncio
+import numpy as np
+from typing import Optional, Mapping, Any, Tuple
 
+import pennylane as qml
+from pennylane import numpy as pnp
+
+from flask import request, session, redirect, url_for, render_template_string, jsonify
+from flask_wtf.csrf import generate_csrf, validate_csrf
+from wtforms.validators import ValidationError
+import sqlite3
+from dataclasses import dataclass
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
+from collections import deque
+from flask.sessions import SecureCookieSessionInterface
+from flask.json.tag  import TaggedJSONSerializer
+from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
+import zlib as _zlib 
 try:
-    import zstandard as zstd
+    import zstandard as zstd  
     _HAS_ZSTD = True
 except Exception:
-    zstd = None
+    zstd = None  
     _HAS_ZSTD = False
 
 try:
-    import oqs as _oqs
-    oqs = cast(Any, _oqs)
+    from typing import TypedDict
+except ImportError:
+    from typing_extensions import TypedDict
+
+try:
+    import oqs as _oqs  
+    oqs = cast(Any, _oqs)  
 except Exception:
     oqs = cast(Any, None)
 
-import bleach
-import geonamescache
-import numpy as np
-import psutil
-import pennylane as qml
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-from argon2.low_level import Type as ArgonType, hash_secret_raw
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.hashes import SHA3_512
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from flask import (
-    Flask, Response, flash, jsonify, make_response, redirect, render_template_string,
-    request, session, stream_with_context, url_for,
-)
-from flask.json.tag import TaggedJSONSerializer
-from flask.sessions import SecureCookieSessionInterface
-from flask_wtf import CSRFProtect, FlaskForm
-from flask_wtf.csrf import generate_csrf, validate_csrf
-from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
-from markdown2 import markdown
-from numpy.random import Generator, PCG64DXSM
 from werkzeug.middleware.proxy_fix import ProxyFix
-from wtforms import (
-    PasswordField, SelectField, StringField, SubmitField, TextAreaField,
-)
-from wtforms.validators import DataRequired, Length, ValidationError
-from pennylane import numpy as pnp
-
 try:
-    import numpy as np
+    import fcntl  
 except Exception:
-    np = None
-
-try:
-    import geonamescache
-except Exception:
-    geonamescache = None
-
-
+    fcntl = None
 class SealedCache(TypedDict, total=False):
     x25519_priv_raw: bytes
     pq_priv_raw: Optional[bytes]
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+
+import geonamescache
 
 
 geonames = geonamescache.GeonamesCache()
