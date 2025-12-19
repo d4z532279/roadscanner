@@ -2372,368 +2372,383 @@ def blog_view(slug: str):
 </html>
     """, post=post, sig_ok=sig_ok, accent=accent)
 
+                
+
+from flask import request, session, redirect, url_for, render_template_string, jsonify
+from flask_wtf.csrf import generate_csrf, validate_csrf
+from wtforms.validators import ValidationError
+
+
+def _csrf_from_request():
+    token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
+    if not token and request.is_json:
+        j = request.get_json(silent=True) or {}
+        token = j.get("csrf_token")
+    if not token:
+        token = request.form.get("csrf_token")
+    return token
+
+
 @app.get("/settings/blog")
-def blog_admin():
+def settings_blog():
     guard = _require_admin()
-    if guard: return guard
+    if guard:
+        return guard
+
     csrf_token = generate_csrf()
-    posts = blog_list_all_admin(limit=300, offset=0)
-    seed = colorsync.sample()
-    accent = seed.get("hex", "#49c2ff")
-    return render_template_string("""
+
+    try:
+        items = blog_list_all_admin()
+    except Exception:
+        items = []
+
+    return render_template_string(
+        """
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>QRS — Blog Admin</title>
+  <title>QRoadScan.com Admin | Blog Editor</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
+
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+
   <style>
-    :root{ --accent: {{ accent }}; }
-    body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
-    .brand{ font-family:'Orbitron',sans-serif; }
-    .navbar{ background:#00000088; border-bottom:1px solid #ffffff22; backdrop-filter:saturate(140%) blur(10px); }
-    .sidebar{ position:fixed; top:0; left:0; height:100%; width:260px; background:#0d1423; border-right:1px solid #ffffff22; padding-top:60px; overflow:auto; }
-    .content{ margin-left:260px; padding:18px; }
-    .card-g{ background:#ffffff10; border:1px solid #ffffff22; border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.55); }
-    .pill{ background:#ffffff18; border:1px solid #ffffff22; border-radius:999px; padding:.2rem .6rem; font-size:.8rem; }
-    .list-item{ padding:.6rem .5rem; border-bottom:1px dashed #ffffff22; cursor:pointer; }
-    .list-item:hover{ background:#ffffff10; }
-    .list-item.active{ background: color-mix(in oklab, var(--accent) 16%, transparent); }
-    .btn-acc{ background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff), color-mix(in oklab, var(--accent) 50%, #2bd1ff)); border:0; color:#07121f; font-weight:900; }
-    .editor{ min-height: 300px; max-height: calc(80vh - 200px); overflow:auto; border-radius:12px; border:1px solid #ffffff22; background:#0d1423; padding:12px; }
-    .editor[contenteditable="true"]:focus{ outline: 2px solid color-mix(in oklab, var(--accent) 50%, #fff); }
-    .muted{ color:#95b2cf; }
-    .form-control, .form-select{ background:#0d1423; border:1px solid #ffffff22; color:#eaf5ff; }
-    .form-control:focus, .form-select:focus{ box-shadow:none; outline:2px solid color-mix(in oklab, var(--accent) 50%, #fff); }
+    body{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',ui-sans-serif,-apple-system,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px}
+    .card{background:#0d1423;border:1px solid #ffffff22;border-radius:16px}
+    .muted{color:#b8cfe4}
+    .list{max-height:70vh;overflow:auto}
+    .row2{display:grid;grid-template-columns:1fr 1.3fr;gap:14px}
+    @media(max-width: 992px){.row2{grid-template-columns:1fr}}
+    input,textarea{background:#0b1222!important;color:#eaf5ff!important;border:1px solid #ffffff22!important}
+    textarea{min-height:220px}
+    .pill{display:inline-block;padding:.25rem .6rem;border-radius:999px;border:1px solid #ffffff22;background:#ffffff10;font-size:.85rem}
+    .btnx{border-radius:12px}
+    a{color:#eaf5ff}
   </style>
 </head>
 <body>
-<nav class="navbar navbar-dark px-3 fixed-top">
-  <a class="navbar-brand brand" href="{{ url_for('home') }}">QRS</a>
-  <div class="d-flex gap-3">
-    <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
-    <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
-    <span class="pill">Blog Admin</span>
-  </div>
-</nav>
-<div class="sidebar">
-  <div class="p-3">
-    <div class="d-flex align-items-center justify-content-between mb-2">
-      <h5 class="m-0">Posts</h5>
-      <button class="btn btn-sm btn-acc" id="btnNew">New</button>
+  <input type="hidden" id="csrf_token" value="{{ csrf_token }}">
+
+  <div class="wrap">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <div class="h4 mb-1" style="font-family:'Orbitron',sans-serif">Blog Admin</div>
+        <div class="muted">Create, edit, publish, and feature posts for QRoadScan.com</div>
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-outline-light btnx" href="{{ url_for('home') }}">Home</a>
+        <a class="btn btn-outline-light btnx" href="{{ url_for('blog_index') }}">Public Blog</a>
+      </div>
     </div>
-    <div id="postList" class="card-g">
-      {% for p in posts %}
-        <div class="list-item" data-id="{{ p['id'] }}">
-          <div class="d-flex justify-content-between">
-            <strong>{{ p['title'] or '(untitled)' }}</strong>
-            <span class="pill">{{ p['status'] }}</span>
-          </div>
-          <div class="muted">{{ p['updated_at'] }} • {{ p['slug'] }}</div>
+
+    <div class="row2">
+      <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <strong>Posts</strong>
+          <button class="btn btn-light btn-sm btnx" id="btnNew">New</button>
         </div>
-      {% endfor %}
-      {% if not posts %}
-        <div class="p-3 muted">No posts yet.</div>
-      {% endif %}
+        <div class="muted mb-2">Tap a post to edit it. Drafts are visible only to admins.</div>
+        <div class="list" id="postList"></div>
+      </div>
+
+      <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <strong id="editorTitle">Editor</strong>
+          <span class="pill" id="statusPill">—</span>
+        </div>
+
+        <div class="mb-2">
+          <label class="muted">Title</label>
+          <input id="title" class="form-control" placeholder="Post title">
+        </div>
+
+        <div class="mb-2">
+          <label class="muted">Slug</label>
+          <input id="slug" class="form-control" placeholder="example-slug">
+        </div>
+
+        <div class="mb-2">
+          <label class="muted">Excerpt (shows on lists)</label>
+          <textarea id="excerpt" class="form-control" placeholder="Short excerpt for list pages..."></textarea>
+        </div>
+
+        <div class="mb-2">
+          <label class="muted">Content (HTML allowed, sanitized)</label>
+          <textarea id="content" class="form-control" placeholder="Write the post..."></textarea>
+        </div>
+
+        <div class="mb-3">
+          <label class="muted">Tags (comma-separated)</label>
+          <input id="tags" class="form-control" placeholder="traffic safety, hazard alerts, commute risk">
+        </div>
+
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-primary btnx" id="btnSave">Save</button>
+          <button class="btn btn-outline-light btnx" id="btnTogglePublish">Toggle Publish</button>
+          <button class="btn btn-outline-light btnx" id="btnToggleFeature">Toggle Feature</button>
+          <button class="btn btn-danger btnx ms-auto" id="btnDelete">Delete</button>
+        </div>
+
+        <div class="muted mt-3" id="msg"></div>
+      </div>
     </div>
   </div>
-</div>
-<div class="content">
-  <div class="card-g p-3 p-md-4">
-    <form id="blogForm" class="row g-3" onsubmit="return false;">
-      <input type="hidden" id="postId" value="">
-      <div class="col-12 col-lg-8">
-        <label class="form-label">Title</label>
-        <input class="form-control" id="title" placeholder="Post title">
-      </div>
-      <div class="col-8 col-lg-3">
-        <label class="form-label">Slug</label>
-        <input class="form-control" id="slug" placeholder="auto-derived (lowercase-hyphens)">
-      </div>
-      <div class="col-4 col-lg-1">
-        <label class="form-label">Status</label>
-        <select id="status" class="form-select">
-          <option value="draft">Draft</option>
-          <option value="published">Published</option>
-          <option value="archived">Archived</option>
-        </select>
-      </div>
-      <div class="col-12">
-        <label class="form-label">Summary (optional)</label>
-        <div id="summary" class="editor" contenteditable="true" aria-label="Summary"></div>
-        <small class="muted">This appears on list pages. Basic formatting allowed.</small>
-      </div>
-      <div class="col-12">
-        <label class="form-label">Content</label>
-        <div id="content" class="editor" contenteditable="true" aria-label="Content"></div>
-        <small class="muted">HTML allowed (sanitized). Paste from Markdown editors is OK.</small>
-      </div>
-      <div class="col-12 col-md-8">
-        <label class="form-label">Tags (comma-separated)</label>
-        <input class="form-control" id="tags" placeholder="safety, quantum, road">
-      </div>
-      <div class="col-12 col-md-4 d-flex align-items-end gap-2">
-        <button class="btn btn-acc w-100" id="btnSave">Save</button>
-        <button class="btn btn-danger w-100" id="btnDelete" disabled>Delete</button>
-        <a class="btn btn-outline-light w-100" id="btnView" target="_blank" rel="noopener">View</a>
-      </div>
-      <div id="msg" class="col-12 muted"></div>
-    </form>
-  </div>
-</div>
-<script src="{{ url_for('static', filename='js/jquery.min.js') }}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-<script src="{{ url_for('static', filename='js/bootstrap.min.js') }}" integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+
+  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
+          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
+          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
+          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+
 <script>
-const CSRF = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-const el = s => document.querySelector(s);
-const $list = document.querySelectorAll.bind(document);
-function setMsg(s, ok){
-  const m = el('#msg');
-  m.textContent = s || '';
-  m.style.color = ok ? '#8bd346' : '#b8cfe4';
-}
-function pick(id){
-  $list('#postList .list-item').forEach(n=>n.classList.remove('active'));
-  const node = document.querySelector('.list-item[data-id="'+id+'"]');
-  if(node) node.classList.add('active');
-}
-async function loadPost(id){
-  pick(id);
-  setMsg('Loading…');
-  try{
-    const r = await fetch(`/admin/blog/api/post/${id}`, {credentials:'same-origin'});
-    if(!r.ok){ setMsg('Error loading post'); return; }
-    const j = await r.json();
-    el('#postId').value = j.id || '';
-    el('#title').value = j.title || '';
-    el('#slug').value = j.slug || '';
-    el('#status').value = j.status || 'draft';
-    el('#summary').innerHTML = j.summary || '';
-    el('#content').innerHTML = j.content || '';
-    el('#tags').value = j.tags || '';
-    el('#btnDelete').disabled = !j.id;
-    el('#btnView').href = j.slug ? `/blog/${j.slug}` : '#';
-    setMsg('Loaded', true);
-  }catch(e){
-    setMsg('Load failed');
-  }
-}
-async function savePost(){
-  setMsg('Saving…');
-  const payload = {
-    id: el('#postId').value ? Number(el('#postId').value) : null,
-    title: el('#title').value || '',
-    slug: el('#slug').value || '',
-    status: el('#status').value || 'draft',
-    summary: el('#summary').innerHTML || '',
-    content: el('#content').innerHTML || '',
-    tags: el('#tags').value || ''
+  const POSTS = {{ items | tojson }};
+  const CSRF = (document.getElementById('csrf_token')?.value) ||
+               (document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')) || "";
+
+  const el = (id)=>document.getElementById(id);
+
+  const state = {
+    id: null,
+    is_published: false,
+    is_featured: false
   };
-  try{
-    const r = await fetch('/admin/blog/api/save', {
-      method:'POST', credentials:'same-origin',
-      headers: {'Content-Type':'application/json','X-CSRFToken':CSRF},
+
+  function setMsg(t){ el("msg").textContent = t || ""; }
+  function setStatus(){
+    const p = state.is_published ? "Published" : "Draft";
+    const f = state.is_featured ? " • Featured" : "";
+    el("statusPill").textContent = p + f;
+  }
+
+  function normalizeSlug(s){
+    return (s||"")
+      .toLowerCase()
+      .trim()
+      .replace(/['"]/g,"")
+      .replace(/[^a-z0-9]+/g,"-")
+      .replace(/^-+|-+$/g,"");
+  }
+
+  function renderList(){
+    const box = el("postList");
+    box.innerHTML = "";
+    if(!POSTS || POSTS.length === 0){
+      box.innerHTML = '<div class="muted p-2">No posts yet.</div>';
+      return;
+    }
+    POSTS.forEach(p=>{
+      const a = document.createElement("a");
+      a.href="#";
+      a.className="d-block p-2 rounded mb-1";
+      a.style.textDecoration="none";
+      a.style.border="1px solid #ffffff18";
+      a.style.background="#ffffff08";
+      a.innerHTML = `<div style="font-weight:900">${(p.title||"Untitled")}</div>
+                     <div class="muted" style="font-size:.9rem">${p.slug||""} • ${(p.is_published?"Published":"Draft")}${(p.is_featured?" • Featured":"")}</div>`;
+      a.onclick=(e)=>{ e.preventDefault(); loadPost(p); };
+      box.appendChild(a);
+    });
+  }
+
+  function clearEditor(){
+    state.id=null;
+    state.is_published=false;
+    state.is_featured=false;
+    el("editorTitle").textContent="New Post";
+    el("title").value="";
+    el("slug").value="";
+    el("excerpt").value="";
+    el("content").value="";
+    el("tags").value="";
+    setStatus();
+    setMsg("");
+  }
+
+  function loadPost(p){
+    state.id = p.id;
+    state.is_published = !!p.is_published;
+    state.is_featured = !!p.is_featured;
+    el("editorTitle").textContent="Edit Post";
+    el("title").value = p.title || "";
+    el("slug").value = p.slug || "";
+    el("excerpt").value = p.excerpt || "";
+    el("content").value = p.content || "";
+    el("tags").value = (p.tags || "");
+    setStatus();
+    setMsg("");
+  }
+
+  el("btnNew").onclick = ()=>clearEditor();
+
+  el("title").addEventListener("input", ()=>{
+    if(!el("slug").value.trim()){
+      el("slug").value = normalizeSlug(el("title").value);
+    }
+  });
+
+  async function apiPost(url, body){
+    const payload = Object.assign({}, body || {}, { csrf_token: CSRF });
+    const r = await fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type":"application/json", "X-CSRFToken": CSRF },
       body: JSON.stringify(payload)
     });
-    const j = await r.json();
-    if(r.ok && j.ok){
-      el('#postId').value = j.id;
-      el('#slug').value = j.slug;
-      el('#btnDelete').disabled = false;
-      el('#btnView').href = `/blog/${j.slug}`;
-      await refreshList(j.id);
-      setMsg(j.msg || 'Saved', true);
-    }else{
-      setMsg(j.msg || 'Save failed');
+    return await r.json();
+  }
+
+  function editorPayload(){
+    return {
+      id: state.id,
+      title: el("title").value.trim(),
+      slug: normalizeSlug(el("slug").value),
+      excerpt: el("excerpt").value.trim(),
+      content: el("content").value,
+      tags: el("tags").value.trim(),
+      is_published: state.is_published,
+      is_featured: state.is_featured
+    };
+  }
+
+  el("btnTogglePublish").onclick = ()=>{
+    state.is_published = !state.is_published;
+    setStatus();
+  };
+
+  el("btnToggleFeature").onclick = ()=>{
+    state.is_featured = !state.is_featured;
+    setStatus();
+  };
+
+  el("btnSave").onclick = async ()=>{
+    setMsg("Saving...");
+    const j = await apiPost("/admin/blog/api/save", editorPayload());
+    if(!j || !j.ok){
+      setMsg("Save failed: " + (j && j.error ? j.error : "unknown error"));
+      return;
     }
-  }catch(e){ setMsg('Save failed'); }
-}
-const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-async function refreshList(selectId){
-  try{
-    const r = await fetch('/admin/blog/api/posts', {credentials:'same-origin'});
-    const j = await r.json();
-    const box = el('#postList');
-    box.innerHTML = '';
-    if(Array.isArray(j.posts) && j.posts.length){
-      j.posts.forEach(p=>{
-        const d = document.createElement('div');
-        d.className = 'list-item';
-        d.dataset.id = p.id;
-        d.innerHTML = `
-          <div class="d-flex justify-content-between">
-            <strong>${esc(p.title||'(untitled)')}</strong>
-            <span class="pill">${esc(p.status)}</span>
-          </div>
-          <div class="muted">${esc(p.updated_at)} • ${esc(p.slug)}</div>`;
-        d.onclick = ()=> loadPost(p.id);
-        box.appendChild(d);
-      });
-    }else{
-      const d = document.createElement('div');
-      d.className='p-3 muted'; d.textContent='No posts yet.'; box.appendChild(d);
+    setMsg("Saved.");
+    location.reload();
+  };
+
+  el("btnDelete").onclick = async ()=>{
+    if(!state.id){ setMsg("Nothing to delete."); return; }
+    if(!confirm("Delete this post?")) return;
+    setMsg("Deleting...");
+    const j = await apiPost("/admin/blog/api/delete", { id: state.id });
+    if(!j || !j.ok){
+      setMsg("Delete failed: " + (j && j.error ? j.error : "unknown error"));
+      return;
     }
-    if(selectId) pick(selectId);
-  }catch(e){}
-}
-async function deletePost(){
-  const id = el('#postId').value;
-  if(!id) return;
-  if(!confirm('Delete this post permanently?')) return;
-  setMsg('Deleting…');
-  try{
-    const r = await fetch('/admin/blog/api/delete', {
-      method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
-      body: JSON.stringify({id: Number(id)})
-    });
-    const j = await r.json();
-    if(r.ok && j.ok){
-      await refreshList();
-      el('#postForm')?.reset?.();
-      el('#postId').value='';
-      el('#title').value='';
-      el('#slug').value='';
-      el('#status').value='draft';
-      el('#summary').innerHTML='';
-      el('#content').innerHTML='';
-      el('#tags').value='';
-      el('#btnDelete').disabled = true;
-      el('#btnView').href = '#';
-      setMsg('Deleted', true);
-    }else{
-      setMsg(j.msg || 'Delete failed');
-    }
-  }catch(e){ setMsg('Delete failed'); }
-}
-el('#btnNew').onclick = ()=>{
-  $list('#postList .list-item').forEach(n=>n.classList.remove('active'));
-  el('#postId').value='';
-  el('#title').value='';
-  el('#slug').value='';
-  el('#status').value='draft';
-  el('#summary').innerHTML='';
-  el('#content').innerHTML='';
-  el('#tags').value='';
-  el('#btnDelete').disabled = true;
-  el('#btnView').href='#';
-  setMsg('New post');
-};
-el('#btnSave').onclick = savePost;
-el('#btnDelete').onclick = deletePost;
-$list('#postList .list-item').forEach(n=>{
-  n.onclick = ()=> loadPost(n.dataset.id);
-});
+    setMsg("Deleted.");
+    location.reload();
+  };
+
+  renderList();
+  clearEditor();
 </script>
 </body>
 </html>
-    """, posts=posts, csrf_token=csrf_token, accent=accent)
+        """,
+        csrf_token=csrf_token,
+        items=items,
+    )
 
-@app.get("/admin/blog/api/posts")
-def blog_api_posts():
-    guard = _require_admin()
-    if guard: return guard
-    posts = blog_list_all_admin(limit=500, offset=0)
-    return jsonify({"ok": True, "posts": posts})
-
-@app.get("/admin/blog/api/post/<int:post_id>")
-def blog_api_post_get(post_id: int):
-    guard = _require_admin()
-    if guard: return guard
-    with sqlite3.connect(DB_FILE) as db:
-        cur = db.cursor()
-        cur.execute("""
-            SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at
-            FROM blog_posts WHERE id=? LIMIT 1
-        """, (int(post_id),))
-        row = cur.fetchone()
-    if not row:
-        return jsonify({"ok": False, "msg": "Not found"}), 404
-    j = {
-        "id": row[0], "slug": row[1],
-        "title": blog_decrypt(row[2]),
-        "content": blog_decrypt(row[3]),
-        "summary": blog_decrypt(row[4]),
-        "tags": blog_decrypt(row[5]),
-        "status": row[6],
-        "created_at": row[7], "updated_at": row[8],
-    }
-    return jsonify(j)
 
 @app.post("/admin/blog/api/save")
-@csrf.exempt
-def blog_api_post_save():
+def admin_blog_api_save():
     guard = _require_admin()
-    if guard: return guard
-    token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token") or ""
+    if guard:
+        return guard
+
+    token = _csrf_from_request()
+    if not token:
+        return jsonify(ok=False, error="csrf_missing"), 400
     try:
         validate_csrf(token)
-    except Exception:
-        return jsonify({"ok": False, "msg": "CSRF failed"}), 400
+    except ValidationError:
+        return jsonify(ok=False, error="csrf_invalid"), 400
+
+    data = request.get_json(silent=True) or {}
+
     try:
-        body = request.get_json(force=True, silent=False) or {}
-    except Exception:
-        return jsonify({"ok": False, "msg": "Bad JSON"}), 400
-    raw_len = len(json.dumps(body, separators=(",",":")))
-    if raw_len > 400_000:
-        return jsonify({"ok": False, "msg": "Payload too large"}), 413
-    post_id = body.get("id")
-    title = sanitize_text(str(body.get("title") or ""), 160)
-    slug = sanitize_text(str(body.get("slug") or ""), 80).lower()
-    summary = str(body.get("summary") or "")
-    content = str(body.get("content") or "")
-    tags = sanitize_tags_csv(str(body.get("tags") or ""))
-    status = str(body.get("status") or "draft")
-    uid = _get_userid_or_abort()
-    if uid <= 0:
-        return jsonify({"ok": False, "msg": "Not authenticated"}), 401
-    ok, msg, saved_id, final_slug = blog_save(
-        post_id = int(post_id) if post_id else None,
-        author_id = uid,
-        title_html = title,
-        content_html = content,
-        summary_html = summary,
-        tags_csv = tags,
-        status = status,
-        slug_in = slug or None
-    )
-    code = 200 if ok else 400
-    return jsonify({"ok": ok, "msg": msg, "id": saved_id, "slug": final_slug}), code
+        saved = blog_admin_save(data)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+    return jsonify(ok=True, post=saved)
+
 
 @app.post("/admin/blog/api/delete")
-@csrf.exempt
-def blog_api_post_delete():
+def admin_blog_api_delete():
     guard = _require_admin()
-    if guard: return guard
-    token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token") or ""
+    if guard:
+        return guard
+
+    token = _csrf_from_request()
+    if not token:
+        return jsonify(ok=False, error="csrf_missing"), 400
     try:
         validate_csrf(token)
-    except Exception:
-        return jsonify({"ok": False, "msg": "CSRF failed"}), 400
-    try:
-        body = request.get_json(force=True, silent=False) or {}
-    except Exception:
-        return jsonify({"ok": False, "msg": "Bad JSON"}), 400
-    pid = body.get("id")
+    except ValidationError:
+        return jsonify(ok=False, error="csrf_invalid"), 400
+
+    data = request.get_json(silent=True) or {}
+    pid = data.get("id")
     if not pid:
-        return jsonify({"ok": False, "msg": "Missing id"}), 400
-    if blog_delete(int(pid)):
-        return jsonify({"ok": True})
-    else:
-        return jsonify({"ok": False, "msg": "Delete failed"}), 500
+        return jsonify(ok=False, error="missing_id"), 400
+
+    try:
+        blog_admin_delete(pid)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+    return jsonify(ok=True)
+
+
+@app.post("/admin/blog/api/feature")
+def admin_blog_api_feature():
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    token = _csrf_from_request()
+    if not token:
+        return jsonify(ok=False, error="csrf_missing"), 400
+    try:
+        validate_csrf(token)
+    except ValidationError:
+        return jsonify(ok=False, error="csrf_invalid"), 400
+
+    data = request.get_json(silent=True) or {}
+    pid = data.get("id")
+    featured = bool(data.get("is_featured"))
+    if not pid:
+        return jsonify(ok=False, error="missing_id"), 400
+
+    try:
+        blog_admin_set_featured(pid, featured)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 400
+
+    return jsonify(ok=True, id=pid, is_featured=featured)
+
 
 @app.get("/admin/blog")
 def blog_admin_redirect():
     guard = _require_admin()
     if guard: return guard
     return redirect(url_for('blog_admin'))
-
-                
-
 
 def overwrite_hazard_reports_by_timestamp(cursor, expiration_str: str, passes: int = 7):
     col_types = [
