@@ -2931,7 +2931,7 @@ def admin_blog_api_save():
     if not ok:
         return jsonify(ok=False, error=msg or "save_failed"), 400
 
-    # Update homepage selection fields (best-effort; doesn't block a successful save).
+   
     if pid is not None:
         try:
             blog_set_featured(int(pid), bool(featured), int(featured_rank))
@@ -4880,7 +4880,7 @@ def home():
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
                   <div class="hud-label" id="hudLabel">INITIALIZING</div>
-                  <div class="hud-note" id="hudNote">Calibrating previewÃ¢â‚¬Â¦</div>
+                  <div class="hud-note" id="hudNote">Calibrating preview</div>
                 </div>
               </div>
             </div>
@@ -4927,7 +4927,7 @@ def home():
               <span class="pill" id="confidencePill" title="Model confidence">Conf: --%</span>
             </div>
             <ul class="list-clean mt-2" id="reasonsList">
-              <li>Waiting for risk signalÃ¢â‚¬Â¦</li>
+              <li>Waiting for risk signal</li>
             </ul>
             <div id="debugBox" class="debug mt-3" style="display:none">debug</div>
           </div>
