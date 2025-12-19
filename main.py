@@ -1,108 +1,97 @@
-
-from __future__ import annotations 
-import logging
+from __future__ import annotations
+import asyncio
+import base64
+import colorsys
+import fcntl
+import hashlib
+import hmac
 import httpx
-import sqlite3
-import psutil
-from flask import (
-    Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, make_response, Response, stream_with_context)
-from flask_wtf import FlaskForm, CSRFProtect
-from flask_wtf.csrf import generate_csrf
-from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
-from wtforms.validators import DataRequired, Length
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.backends import default_backend
-
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-from argon2.low_level import Type
-from datetime import timedelta, datetime
-from markdown2 import markdown
-import bleach
-import geonamescache
+import itertools
+import json
+import logging
+import math
+import os
 import random
 import re
-import base64
-import math
+import secrets
+import sqlite3
+import string
+import sys
 import threading
 import time
-import hmac
-import hashlib
-import secrets
-from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, cast
 import uuid
-import asyncio
-import sys
-import pennylane as qml
-import numpy as np
-from pathlib import Path
-import os
-import json
-import string
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.hashes import SHA3_512
-from argon2.low_level import hash_secret_raw, Type as ArgonType
-from numpy.random import Generator, PCG64DXSM
-import itertools
-import colorsys
-import os
-import json
-import time
-import bleach
-import logging
-import asyncio
-import numpy as np
-from typing import Optional, Mapping, Any, Tuple
-
-import pennylane as qml
-from pennylane import numpy as pnp
-
-from dataclasses import dataclass
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
+import zlib as _zlib
 from collections import deque
-from flask.sessions import SecureCookieSessionInterface
-from flask.json.tag  import TaggedJSONSerializer
-from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
-import zlib as _zlib 
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import (
+    Any, Callable, Dict, List, Mapping, Optional, Tuple, TypedDict, Union, cast,
+)
+
 try:
-    import zstandard as zstd  
+    import zstandard as zstd
     _HAS_ZSTD = True
 except Exception:
-    zstd = None  
+    zstd = None
     _HAS_ZSTD = False
 
 try:
-    from typing import TypedDict
-except ImportError:
-    from typing_extensions import TypedDict
-
-try:
-    import oqs as _oqs  
-    oqs = cast(Any, _oqs)  
+    import oqs as _oqs
+    oqs = cast(Any, _oqs)
 except Exception:
     oqs = cast(Any, None)
 
+import bleach
+import geonamescache
+import numpy as np
+import psutil
+import pennylane as qml
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from argon2.low_level import Type as ArgonType, hash_secret_raw
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from flask import (
+    Flask, Response, flash, jsonify, make_response, redirect, render_template_string,
+    request, session, stream_with_context, url_for,
+)
+from flask.json.tag import TaggedJSONSerializer
+from flask.sessions import SecureCookieSessionInterface
+from flask_wtf import CSRFProtect, FlaskForm
+from flask_wtf.csrf import generate_csrf, validate_csrf
+from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
+from markdown2 import markdown
+from numpy.random import Generator, PCG64DXSM
 from werkzeug.middleware.proxy_fix import ProxyFix
+from wtforms import (
+    PasswordField, SelectField, StringField, SubmitField, TextAreaField,
+)
+from wtforms.validators import DataRequired, Length, ValidationError
+from pennylane import numpy as pnp
+
 try:
-    import fcntl  # POSIX-only file locking (Linux/macOS). If unavailable, we fall back gracefully.
+    import numpy as np
 except Exception:
-    fcntl = None
+    np = None
+
+try:
+    import geonamescache
+except Exception:
+    geonamescache = None
+
+
 class SealedCache(TypedDict, total=False):
     x25519_priv_raw: bytes
     pq_priv_raw: Optional[bytes]
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
-try:
-    import numpy as np
-except Exception:
-    np = None
-
-
-import geonamescache
 
 
 geonames = geonamescache.GeonamesCache()
@@ -2374,23 +2363,49 @@ def blog_view(slug: str):
 
                 
 
-from flask import request, session, redirect, url_for, render_template_string, jsonify
-from flask_wtf.csrf import generate_csrf, validate_csrf
-from wtforms.validators import ValidationError
-
-
+# --- CSRF helper (header -> json -> form) ---
 def _csrf_from_request():
     token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
-    if not token and request.is_json:
-        j = request.get_json(silent=True) or {}
-        token = j.get("csrf_token")
+    if not token:
+        if request.is_json:
+            j = request.get_json(silent=True) or {}
+            token = j.get("csrf_token")
     if not token:
         token = request.form.get("csrf_token")
     return token
 
 
-@app.get("/settings/blog")
-def settings_blog():
+def _admin_blog_get_by_id(post_id: int):
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            cur.execute(
+                "SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id "
+                "FROM blog_posts WHERE id=? LIMIT 1",
+                (int(post_id),),
+            )
+            r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "slug": r[1],
+            "title": blog_decrypt(r[2]),
+            "content": blog_decrypt(r[3]),
+            "summary": blog_decrypt(r[4]),
+            "tags": blog_decrypt(r[5]),
+            "status": r[6],
+            "created_at": r[7],
+            "updated_at": r[8],
+            "author_id": r[9],
+        }
+    except Exception:
+        return None
+
+
+# IMPORTANT: keep endpoint name "blog_admin" so url_for('blog_admin') works (fixes /blog crash)
+@app.get("/settings/blog", endpoint="blog_admin")
+def blog_admin():
     guard = _require_admin()
     if guard:
         return guard
@@ -2403,7 +2418,7 @@ def settings_blog():
         items = []
 
     return render_template_string(
-        """
+        r"""
 <!doctype html>
 <html lang="en">
 <head>
@@ -2412,27 +2427,24 @@ def settings_blog():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
 
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-
   <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
 
   <style>
-    body{background:#0b0f17;color:#eaf5ff;font-family:'Roboto',ui-sans-serif,-apple-system,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif}
+    body{background:#0b0f17;color:#eaf5ff}
     .wrap{max-width:1100px;margin:0 auto;padding:18px}
     .card{background:#0d1423;border:1px solid #ffffff22;border-radius:16px}
     .muted{color:#b8cfe4}
     .list{max-height:70vh;overflow:auto}
     .row2{display:grid;grid-template-columns:1fr 1.3fr;gap:14px}
     @media(max-width: 992px){.row2{grid-template-columns:1fr}}
-    input,textarea{background:#0b1222!important;color:#eaf5ff!important;border:1px solid #ffffff22!important}
+    input,textarea,select{background:#0b1222!important;color:#eaf5ff!important;border:1px solid #ffffff22!important}
     textarea{min-height:220px}
     .pill{display:inline-block;padding:.25rem .6rem;border-radius:999px;border:1px solid #ffffff22;background:#ffffff10;font-size:.85rem}
     .btnx{border-radius:12px}
     a{color:#eaf5ff}
+    .post-item{display:block;padding:10px;border-radius:12px;margin-bottom:8px;text-decoration:none;border:1px solid #ffffff18;background:#ffffff08}
+    .post-item:hover{background:#ffffff10}
   </style>
 </head>
 <body>
@@ -2441,8 +2453,8 @@ def settings_blog():
   <div class="wrap">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <div>
-        <div class="h4 mb-1" style="font-family:'Orbitron',sans-serif">Blog Admin</div>
-        <div class="muted">Create, edit, publish, and feature posts for QRoadScan.com</div>
+        <div class="h4 mb-1">Blog Admin</div>
+        <div class="muted">Create, edit, and publish posts for QRoadScan.com</div>
       </div>
       <div class="d-flex gap-2">
         <a class="btn btn-outline-light btnx" href="{{ url_for('home') }}">Home</a>
@@ -2456,7 +2468,7 @@ def settings_blog():
           <strong>Posts</strong>
           <button class="btn btn-light btn-sm btnx" id="btnNew">New</button>
         </div>
-        <div class="muted mb-2">Tap a post to edit it. Drafts are visible only to admins.</div>
+        <div class="muted mb-2">Tap a post to load it. Drafts are visible only to admins.</div>
         <div class="list" id="postList"></div>
       </div>
 
@@ -2491,10 +2503,17 @@ def settings_blog():
           <input id="tags" class="form-control" placeholder="traffic safety, hazard alerts, commute risk">
         </div>
 
+        <div class="mb-3">
+          <label class="muted">Status</label>
+          <select id="status" class="form-control">
+            <option value="draft">Draft</option>
+            <option value="published">Published</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
+
         <div class="d-flex flex-wrap gap-2">
           <button class="btn btn-primary btnx" id="btnSave">Save</button>
-          <button class="btn btn-outline-light btnx" id="btnTogglePublish">Toggle Publish</button>
-          <button class="btn btn-outline-light btnx" id="btnToggleFeature">Toggle Feature</button>
           <button class="btn btn-danger btnx ms-auto" id="btnDelete">Delete</button>
         </div>
 
@@ -2503,13 +2522,6 @@ def settings_blog():
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
-          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
-
 <script>
   const POSTS = {{ items | tojson }};
   const CSRF = (document.getElementById('csrf_token')?.value) ||
@@ -2517,17 +2529,12 @@ def settings_blog():
 
   const el = (id)=>document.getElementById(id);
 
-  const state = {
-    id: null,
-    is_published: false,
-    is_featured: false
-  };
+  const state = { id: null };
 
   function setMsg(t){ el("msg").textContent = t || ""; }
-  function setStatus(){
-    const p = state.is_published ? "Published" : "Draft";
-    const f = state.is_featured ? " • Featured" : "";
-    el("statusPill").textContent = p + f;
+  function setStatusPill(){
+    const s = (el("status").value || "draft").toLowerCase();
+    el("statusPill").textContent = (s === "published") ? "Published" : (s === "archived") ? "Archived" : "Draft";
   }
 
   function normalizeSlug(s){
@@ -2549,52 +2556,26 @@ def settings_blog():
     POSTS.forEach(p=>{
       const a = document.createElement("a");
       a.href="#";
-      a.className="d-block p-2 rounded mb-1";
-      a.style.textDecoration="none";
-      a.style.border="1px solid #ffffff18";
-      a.style.background="#ffffff08";
+      a.className="post-item";
       a.innerHTML = `<div style="font-weight:900">${(p.title||"Untitled")}</div>
-                     <div class="muted" style="font-size:.9rem">${p.slug||""} • ${(p.is_published?"Published":"Draft")}${(p.is_featured?" • Featured":"")}</div>`;
-      a.onclick=(e)=>{ e.preventDefault(); loadPost(p); };
+                     <div class="muted" style="font-size:.9rem">${p.slug||""} • ${(p.status||"draft")}</div>`;
+      a.onclick = async (e)=>{ e.preventDefault(); await loadPostById(p.id); };
       box.appendChild(a);
     });
   }
 
   function clearEditor(){
     state.id=null;
-    state.is_published=false;
-    state.is_featured=false;
     el("editorTitle").textContent="New Post";
     el("title").value="";
     el("slug").value="";
     el("excerpt").value="";
     el("content").value="";
     el("tags").value="";
-    setStatus();
+    el("status").value="draft";
+    setStatusPill();
     setMsg("");
   }
-
-  function loadPost(p){
-    state.id = p.id;
-    state.is_published = !!p.is_published;
-    state.is_featured = !!p.is_featured;
-    el("editorTitle").textContent="Edit Post";
-    el("title").value = p.title || "";
-    el("slug").value = p.slug || "";
-    el("excerpt").value = p.excerpt || "";
-    el("content").value = p.content || "";
-    el("tags").value = (p.tags || "");
-    setStatus();
-    setMsg("");
-  }
-
-  el("btnNew").onclick = ()=>clearEditor();
-
-  el("title").addEventListener("input", ()=>{
-    if(!el("slug").value.trim()){
-      el("slug").value = normalizeSlug(el("title").value);
-    }
-  });
 
   async function apiPost(url, body){
     const payload = Object.assign({}, body || {}, { csrf_token: CSRF });
@@ -2607,6 +2588,40 @@ def settings_blog():
     return await r.json();
   }
 
+  async function loadPostById(id){
+    setMsg("Loading...");
+    const j = await apiPost("/admin/blog/api/get", { id });
+    if(!j || !j.ok || !j.post){
+      setMsg("Load failed: " + (j && j.error ? j.error : "unknown error"));
+      return;
+    }
+    const p = j.post;
+    state.id = p.id;
+    el("editorTitle").textContent="Edit Post";
+    el("title").value = p.title || "";
+    el("slug").value = p.slug || "";
+    el("excerpt").value = p.summary || "";
+    el("content").value = p.content || "";
+    el("tags").value = p.tags || "";
+    el("status").value = (p.status || "draft").toLowerCase();
+    setStatusPill();
+    setMsg("");
+  }
+
+  el("btnNew").onclick = ()=>clearEditor();
+
+  el("title").addEventListener("input", ()=>{
+    if(!el("slug").value.trim()){
+      el("slug").value = normalizeSlug(el("title").value);
+    }
+  });
+
+  el("slug").addEventListener("blur", ()=>{
+    el("slug").value = normalizeSlug(el("slug").value);
+  });
+
+  el("status").addEventListener("change", setStatusPill);
+
   function editorPayload(){
     return {
       id: state.id,
@@ -2615,20 +2630,9 @@ def settings_blog():
       excerpt: el("excerpt").value.trim(),
       content: el("content").value,
       tags: el("tags").value.trim(),
-      is_published: state.is_published,
-      is_featured: state.is_featured
+      status: (el("status").value || "draft").toLowerCase()
     };
   }
-
-  el("btnTogglePublish").onclick = ()=>{
-    state.is_published = !state.is_published;
-    setStatus();
-  };
-
-  el("btnToggleFeature").onclick = ()=>{
-    state.is_featured = !state.is_featured;
-    setStatus();
-  };
 
   el("btnSave").onclick = async ()=>{
     setMsg("Saving...");
@@ -2637,7 +2641,7 @@ def settings_blog():
       setMsg("Save failed: " + (j && j.error ? j.error : "unknown error"));
       return;
     }
-    setMsg("Saved.");
+    setMsg((j.msg || "Saved.") + (j.slug ? (" • /blog/" + j.slug) : ""));
     location.reload();
   };
 
@@ -2665,12 +2669,7 @@ def settings_blog():
     )
 
 
-@app.post("/admin/blog/api/save")
-def admin_blog_api_save():
-    guard = _require_admin()
-    if guard:
-        return guard
-
+def _admin_csrf_guard():
     token = _csrf_from_request()
     if not token:
         return jsonify(ok=False, error="csrf_missing"), 400
@@ -2678,15 +2677,75 @@ def admin_blog_api_save():
         validate_csrf(token)
     except ValidationError:
         return jsonify(ok=False, error="csrf_invalid"), 400
+    return None
+
+
+@app.post("/admin/blog/api/get")
+def admin_blog_api_get():
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    csrf_fail = _admin_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+
+    data = request.get_json(silent=True) or {}
+    pid = data.get("id")
+    if not pid:
+        return jsonify(ok=False, error="missing_id"), 400
+
+    post = _admin_blog_get_by_id(int(pid))
+    if not post:
+        return jsonify(ok=False, error="not_found"), 404
+
+    return jsonify(ok=True, post=post)
+
+
+@app.post("/admin/blog/api/save")
+def admin_blog_api_save():
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    csrf_fail = _admin_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
 
     data = request.get_json(silent=True) or {}
 
+    post_id = data.get("id") or None
     try:
-        saved = blog_admin_save(data)
-    except Exception as e:
-        return jsonify(ok=False, error=str(e)), 400
+        post_id = int(post_id) if post_id is not None else None
+    except Exception:
+        post_id = None
 
-    return jsonify(ok=True, post=saved)
+    title = data.get("title") or ""
+    slug = data.get("slug") or None
+    content = data.get("content") or ""
+    summary = data.get("excerpt") or data.get("summary") or ""
+    tags = data.get("tags") or ""
+    status = (data.get("status") or "draft").lower()
+
+    author_id = _get_userid_or_abort()
+    if author_id < 0:
+        return jsonify(ok=False, error="login_required"), 401
+
+    ok, msg, pid, out_slug = blog_save(
+        post_id=post_id,
+        author_id=int(author_id),
+        title_html=title,
+        content_html=content,
+        summary_html=summary,
+        tags_csv=tags,
+        status=status,
+        slug_in=slug,
+    )
+    if not ok:
+        return jsonify(ok=False, error=msg or "save_failed"), 400
+
+    post = _admin_blog_get_by_id(int(pid)) if pid else None
+    return jsonify(ok=True, msg=msg, id=pid, slug=out_slug, post=post)
 
 
 @app.post("/admin/blog/api/delete")
@@ -2695,53 +2754,21 @@ def admin_blog_api_delete():
     if guard:
         return guard
 
-    token = _csrf_from_request()
-    if not token:
-        return jsonify(ok=False, error="csrf_missing"), 400
-    try:
-        validate_csrf(token)
-    except ValidationError:
-        return jsonify(ok=False, error="csrf_invalid"), 400
+    csrf_fail = _admin_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
 
     data = request.get_json(silent=True) or {}
     pid = data.get("id")
     if not pid:
         return jsonify(ok=False, error="missing_id"), 400
 
-    try:
-        blog_admin_delete(pid)
-    except Exception as e:
-        return jsonify(ok=False, error=str(e)), 400
+    ok = blog_delete(int(pid))
+    if not ok:
+        return jsonify(ok=False, error="delete_failed"), 400
 
     return jsonify(ok=True)
 
-
-@app.post("/admin/blog/api/feature")
-def admin_blog_api_feature():
-    guard = _require_admin()
-    if guard:
-        return guard
-
-    token = _csrf_from_request()
-    if not token:
-        return jsonify(ok=False, error="csrf_missing"), 400
-    try:
-        validate_csrf(token)
-    except ValidationError:
-        return jsonify(ok=False, error="csrf_invalid"), 400
-
-    data = request.get_json(silent=True) or {}
-    pid = data.get("id")
-    featured = bool(data.get("is_featured"))
-    if not pid:
-        return jsonify(ok=False, error="missing_id"), 400
-
-    try:
-        blog_admin_set_featured(pid, featured)
-    except Exception as e:
-        return jsonify(ok=False, error=str(e)), 400
-
-    return jsonify(ok=True, id=pid, is_featured=featured)
 
 
 @app.get("/admin/blog")
