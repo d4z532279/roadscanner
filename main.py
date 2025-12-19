@@ -1,3 +1,4 @@
+
 from __future__ import annotations 
 import logging
 import httpx
@@ -55,7 +56,10 @@ import asyncio
 import numpy as np
 from typing import Optional, Mapping, Any, Tuple
 
-import pennylane as qml
+import pennylane 
+import random
+import asyncio
+from typing import Optional qml
 from pennylane import numpy as pnp
 
 from flask import request, session, redirect, url_for, render_template_string, jsonify
@@ -271,7 +275,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         pw = _gen_passphrase()
         os.environ["ENCRYPTION_PASSPHRASE"] = pw
         exports.append(("ENCRYPTION_PASSPHRASE", pw))
-        logger.warning("ENCRYPTION_PASSPHRASE was missing — generated for this process.")
+        logger.warning("ENCRYPTION_PASSPHRASE was missing â€” generated for this process.")
     passphrase = os.environ["ENCRYPTION_PASSPHRASE"]
 
     salt = _b64get(ENV_SALT_B64)
@@ -1960,8 +1964,29 @@ def create_tables():
                 FOREIGN KEY (author_id) REFERENCES users(id)
             )
         """)
+
+      
+        cursor.execute("PRAGMA table_info(blog_posts)")
+        blog_cols = {row[1] for row in cursor.fetchall()}
+        blog_alters = {
+            
+            "summary_enc": "ALTER TABLE blog_posts ADD COLUMN summary_enc TEXT",
+            "tags_enc": "ALTER TABLE blog_posts ADD COLUMN tags_enc TEXT",
+            
+            "sig_alg": "ALTER TABLE blog_posts ADD COLUMN sig_alg TEXT",
+            "sig_pub_fp8": "ALTER TABLE blog_posts ADD COLUMN sig_pub_fp8 TEXT",
+            "sig_val": "ALTER TABLE blog_posts ADD COLUMN sig_val BLOB",
+            
+            "featured": "ALTER TABLE blog_posts ADD COLUMN featured INTEGER NOT NULL DEFAULT 0",
+            "featured_rank": "ALTER TABLE blog_posts ADD COLUMN featured_rank INTEGER NOT NULL DEFAULT 0",
+        }
+        for col, alter_sql in blog_alters.items():
+            if col not in blog_cols:
+                cursor.execute(alter_sql)
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blog_status_created ON blog_posts (status, created_at DESC)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blog_updated ON blog_posts (updated_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blog_featured ON blog_posts (featured, featured_rank DESC, created_at DESC)")
         db.commit()
     print("Database tables created and verified successfully.")
 
@@ -2123,11 +2148,77 @@ def blog_list_published(limit: int = 25, offset: int = 0) -> list[dict]:
             "author_id": r[8],
         })
     return out
+
+
+def blog_list_featured(limit: int = 6) -> list[dict]:
+   
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        cur.execute(
+            """
+            SELECT id,slug,title_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,featured,featured_rank
+            FROM blog_posts
+            WHERE status='published' AND featured=1
+            ORDER BY featured_rank DESC, created_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+    out: list[dict] = []
+    for r in rows:
+        out.append(
+            {
+                "id": r[0],
+                "slug": r[1],
+                "title": blog_decrypt(r[2]),
+                "summary": blog_decrypt(r[3]),
+                "tags": blog_decrypt(r[4]),
+                "status": r[5],
+                "created_at": r[6],
+                "updated_at": r[7],
+                "author_id": r[8],
+                "featured": int(r[9] or 0),
+                "featured_rank": int(r[10] or 0),
+            }
+        )
+    return out
+
+
+def blog_list_home(limit: int = 3) -> list[dict]:
+
+    try:
+        featured = blog_list_featured(limit=limit)
+        if featured:
+            return featured
+    except Exception:
+        pass
+    return blog_list_published(limit=limit, offset=0)
+
+
+def blog_set_featured(post_id: int, featured: bool, featured_rank: int = 0) -> bool:
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE blog_posts SET featured=?, featured_rank=? WHERE id=?",
+                (1 if featured else 0, int(featured_rank or 0), int(post_id)),
+            )
+            db.commit()
+        audit.append(
+            "blog_featured_set",
+            {"id": int(post_id), "featured": bool(featured), "featured_rank": int(featured_rank or 0)},
+            actor=session.get("username") or "admin",
+        )
+        return True
+    except Exception as e:
+        logger.error(f"blog_set_featured failed: {e}", exc_info=True)
+        return False
 def blog_list_all_admin(limit: int = 200, offset: int = 0) -> list[dict]:
     with sqlite3.connect(DB_FILE) as db:
         cur = db.cursor()
         cur.execute("""
-            SELECT id,slug,title_enc,status,created_at,updated_at
+            SELECT id,slug,title_enc,status,created_at,updated_at,featured,featured_rank
             FROM blog_posts
             ORDER BY updated_at DESC
             LIMIT ? OFFSET ?
@@ -2141,6 +2232,8 @@ def blog_list_all_admin(limit: int = 200, offset: int = 0) -> list[dict]:
             "status": r[3],
             "created_at": r[4],
             "updated_at": r[5],
+            "featured": int(r[6] or 0),
+            "featured_rank": int(r[7] or 0),
         })
     return out
 def blog_slug_exists(slug: str, exclude_id: Optional[int]=None) -> bool:
@@ -2299,7 +2392,7 @@ def blog_index():
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>QRS — Blog</title>
+  <title>QRS â€” Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
@@ -2370,7 +2463,7 @@ def blog_view(slug: str):
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ post['title'] }} — QRS Blog</title>
+  <title>{{ post['title'] }} â€” QRS Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
@@ -2407,12 +2500,12 @@ def blog_view(slug: str):
     <div class="meta mb-3">
       {{ post['created_at'] }}
       {% if post['tags'] %}
-        •
+        â€¢
         {% for t in post['tags'].split(',') if t %}
           <span class="tag">{{ t }}</span>
         {% endfor %}
       {% endif %}
-      • Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
+      â€¢ Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
       {% if session.get('is_admin') and post['status']!='published' %}
         <span class="badge badge-warning">PREVIEW ({{ post['status'] }})</span>
       {% endif %}
@@ -2442,7 +2535,7 @@ def _admin_blog_get_by_id(post_id: int):
         with sqlite3.connect(DB_FILE) as db:
             cur = db.cursor()
             cur.execute(
-                "SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id "
+                "SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,featured,featured_rank "
                 "FROM blog_posts WHERE id=? LIMIT 1",
                 (int(post_id),),
             )
@@ -2460,6 +2553,8 @@ def _admin_blog_get_by_id(post_id: int):
             "created_at": r[7],
             "updated_at": r[8],
             "author_id": r[9],
+            "featured": int(r[10] or 0),
+            "featured_rank": int(r[11] or 0),
         }
     except Exception:
         return None
@@ -2537,7 +2632,7 @@ def blog_admin():
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong id="editorTitle">Editor</strong>
-          <span class="pill" id="statusPill">—</span>
+          <span class="pill" id="statusPill">â€”</span>
         </div>
 
         <div class="mb-2">
@@ -2563,6 +2658,15 @@ def blog_admin():
         <div class="mb-3">
           <label class="muted">Tags (comma-separated)</label>
           <input id="tags" class="form-control" placeholder="traffic safety, hazard alerts, commute risk">
+        </div>
+
+        <div class="mb-3">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="featured">
+            <label class="form-check-label muted" for="featured">Feature on homepage (selected display)</label>
+          </div>
+          <label class="muted mt-2">Feature order (higher shows first)</label>
+          <input id="featured_rank" class="form-control" type="number" value="0" min="0" step="1">
         </div>
 
         <div class="mb-3">
@@ -2619,8 +2723,11 @@ def blog_admin():
       const a = document.createElement("a");
       a.href="#";
       a.className="post-item";
-      a.innerHTML = `<div style="font-weight:900">${(p.title||"Untitled")}</div>
-                     <div class="muted" style="font-size:.9rem">${p.slug||""} • ${(p.status||"draft")}</div>`;
+      const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured)==="1"));
+      const star = isFeatured ? "â˜… " : "";
+      const featMeta = isFeatured ? ` â€¢ featured:${(p.featured_rank ?? 0)}` : "";
+      a.innerHTML = `<div style="font-weight:900">${star}${(p.title||"Untitled")}</div>
+                     <div class="muted" style="font-size:.9rem">${p.slug||""} â€¢ ${(p.status||"draft")}${featMeta}</div>`;
       a.onclick = async (e)=>{ e.preventDefault(); await loadPostById(p.id); };
       box.appendChild(a);
     });
@@ -2634,6 +2741,8 @@ def blog_admin():
     el("excerpt").value="";
     el("content").value="";
     el("tags").value="";
+    el("featured").checked = false;
+    el("featured_rank").value = 0;
     el("status").value="draft";
     setStatusPill();
     setMsg("");
@@ -2665,6 +2774,9 @@ def blog_admin():
     el("excerpt").value = p.summary || "";
     el("content").value = p.content || "";
     el("tags").value = p.tags || "";
+    const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured)==="1"));
+    el("featured").checked = isFeatured;
+    el("featured_rank").value = (p.featured_rank ?? 0);
     el("status").value = (p.status || "draft").toLowerCase();
     setStatusPill();
     setMsg("");
@@ -2692,6 +2804,8 @@ def blog_admin():
       excerpt: el("excerpt").value.trim(),
       content: el("content").value,
       tags: el("tags").value.trim(),
+      featured: el("featured").checked ? 1 : 0,
+      featured_rank: (parseInt(el("featured_rank").value, 10) || 0),
       status: (el("status").value || "draft").toLowerCase()
     };
   }
@@ -2703,7 +2817,7 @@ def blog_admin():
       setMsg("Save failed: " + (j && j.error ? j.error : "unknown error"));
       return;
     }
-    setMsg((j.msg || "Saved.") + (j.slug ? (" • /blog/" + j.slug) : ""));
+    setMsg((j.msg || "Saved.") + (j.slug ? (" â€¢ /blog/" + j.slug) : ""));
     location.reload();
   };
 
@@ -2789,6 +2903,15 @@ def admin_blog_api_save():
     tags = data.get("tags") or ""
     status = (data.get("status") or "draft").lower()
 
+    try:
+        featured = int(data.get("featured") or 0)
+    except Exception:
+        featured = 0
+    try:
+        featured_rank = int(data.get("featured_rank") or 0)
+    except Exception:
+        featured_rank = 0
+
     author_id = _get_userid_or_abort()
     if author_id < 0:
         return jsonify(ok=False, error="login_required"), 401
@@ -2805,6 +2928,13 @@ def admin_blog_api_save():
     )
     if not ok:
         return jsonify(ok=False, error=msg or "save_failed"), 400
+
+    # Update homepage selection fields (best-effort; doesn't block a successful save).
+    if pid is not None:
+        try:
+            blog_set_featured(int(pid), bool(featured), int(featured_rank))
+        except Exception:
+            pass
 
     post = _admin_blog_get_by_id(int(pid)) if pid else None
     return jsonify(ok=True, msg=msg, id=pid, slug=out_slug, post=post)
@@ -2830,8 +2960,6 @@ def admin_blog_api_delete():
         return jsonify(ok=False, error="delete_failed"), 400
 
     return jsonify(ok=True)
-
-
 
 @app.get("/admin/blog")
 def blog_admin_redirect():
@@ -2904,6 +3032,7 @@ def overwrite_entropy_logs_by_passnum(cursor, pass_num: int, passes: int = 7):
         vals = _values_for_types(col_types, pattern)
         cursor.execute(sql, (*vals, pass_num))
         logger.debug("Pass %d complete for entropy_logs (pass_num).", i)
+        
 def _dynamic_argon2_hasher():
 
     try:
@@ -3028,10 +3157,7 @@ def enforce_admin_presence():
         import sys
         sys.exit("FATAL: No admin account present.")
 
-
 create_tables()
-
-
 
 _init_done = False
 _init_lock = threading.Lock()
@@ -3052,13 +3178,11 @@ def init_app_once():
 with app.app_context():
     init_app_once()
 
-
 def is_registration_enabled():
     val = os.getenv('REGISTRATION_ENABLED', 'false')
     enabled = str(val).strip().lower() in ('1', 'true', 'yes', 'on')
     logger.debug(f"[ENV] Registration enabled: {enabled} (REGISTRATION_ENABLED={val!r})")
     return enabled
-
 
 def set_registration_enabled(enabled: bool, admin_user_id: int):
     os.environ['REGISTRATION_ENABLED'] = 'true' if enabled else 'false'
@@ -3066,13 +3190,11 @@ def set_registration_enabled(enabled: bool, admin_user_id: int):
         f"[ENV] Admin user_id {admin_user_id} set REGISTRATION_ENABLED={os.environ['REGISTRATION_ENABLED']}"
     )
 
-
 def create_database_connection():
 
     db_connection = sqlite3.connect(DB_FILE, timeout=30.0)
     db_connection.execute("PRAGMA journal_mode=WAL;")
     return db_connection
-
 
 def collect_entropy(sources=None) -> int:
     if sources is None:
@@ -3092,7 +3214,6 @@ def collect_entropy(sources=None) -> int:
         str, entropy_pool)).encode()).digest()
     return int.from_bytes(combined_entropy, 'big') % 2**512
 
-
 def fetch_entropy_logs():
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -3109,9 +3230,10 @@ def fetch_entropy_logs():
 
     return decrypted_logs
 
-
 _BG_LOCK_PATH = os.getenv("QRS_BG_LOCK_PATH", "/tmp/qrs_bg.lock")
-_BG_LOCK_HANDLE = None  # keep process-lifetime handle
+
+_BG_LOCK_HANDLE = None 
+
 def start_background_jobs_once() -> None:
     global _BG_LOCK_HANDLE
     if getattr(app, "_bg_started", False):
@@ -3127,10 +3249,10 @@ def start_background_jobs_once() -> None:
             ok_to_start = os.environ.get("QRS_BG_STARTED") != "1"
             os.environ["QRS_BG_STARTED"] = "1"
     except Exception:
-        ok_to_start = False  # another proc owns it
+        ok_to_start = False 
 
     if ok_to_start:
-        # Only rotate the Flask session key if explicitly enabled
+        
         if os.getenv("QRS_ROTATE_SESSION_KEY", "0") == "1":
             threading.Thread(target=rotate_secret_key, daemon=True).start()
             logger.debug("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
@@ -3171,7 +3293,7 @@ def delete_expired_data():
                     cur.execute("DELETE FROM hazard_reports WHERE timestamp<=?", (expiration_str,))
                     logger.debug("hazard_reports purged: %s", ids)
                 else:
-                    logger.warning("hazard_reports skipped – missing columns: %s", required - hazard_cols)
+                    logger.warning("hazard_reports skipped â€“ missing columns: %s", required - hazard_cols)
                 cur.execute("PRAGMA table_info(entropy_logs)")
                 entropy_cols = {r["name"] for r in cur.fetchall()}
                 req_e = {"id","log","pass_num","timestamp"}
@@ -3182,7 +3304,7 @@ def delete_expired_data():
                     cur.execute("DELETE FROM entropy_logs WHERE timestamp<=?", (expiration_str,))
                     logger.debug("entropy_logs purged: %s", ids)
                 else:
-                    logger.warning("entropy_logs skipped – missing columns: %s", req_e - entropy_cols)
+                    logger.warning("entropy_logs skipped â€“ missing columns: %s", req_e - entropy_cols)
                 db.commit()
             try:
                 with sqlite3.connect(DB_FILE) as db:
@@ -3205,14 +3327,11 @@ def delete_user_data(user_id):
             cursor = db.cursor()
             db.execute("BEGIN")
 
-
             overwrite_hazard_reports_by_user(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM hazard_reports WHERE user_id = ?", (user_id, ))
 
-
             overwrite_rate_limits_by_user(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM rate_limits WHERE user_id = ?", (user_id, ))
-
 
             overwrite_entropy_logs_by_passnum(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM entropy_logs WHERE pass_num = ?", (user_id, ))
@@ -3231,20 +3350,13 @@ def delete_user_data(user_id):
             f"Failed to securely delete data for user_id {user_id}: {e}",
             exc_info=True)
 
-
-
-
-
 def sanitize_input(user_input):
     if not isinstance(user_input, str):
         user_input = str(user_input)
     return bleach.clean(user_input)
 
-
 gc = geonamescache.GeonamesCache()
 cities = gc.get_cities()
-
-
 
 def _stable_seed(s: str) -> int:
     h = hashlib.sha256(s.encode("utf-8")).hexdigest()
@@ -3273,8 +3385,6 @@ def _attach_cookie(resp):
         resp.set_cookie("qrs_fp", fp, samesite="Lax", max_age=60*60*24*365)
     return resp
 
-
-
 def _safe_json_parse(txt: str):
     try:
         return json.loads(txt)
@@ -3287,7 +3397,7 @@ def _safe_json_parse(txt: str):
             return None
     return None
 
-_QML_OK = False  # set a safe default; we’ll probe at runtime
+_QML_OK = False
 
 def _qml_ready() -> bool:
     try:
@@ -3301,7 +3411,7 @@ def _quantum_features(cpu: float, ram: float):
         return None, "unavailable"
     try:
         probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  # le
-        # Shannon entropy (bits)
+        
         H = float(-(probs * np.log2(np.clip(probs, 1e-12, 1))).sum())
         idx = int(np.argmax(probs))
         peak_p = float(probs[idx])
@@ -3346,23 +3456,23 @@ def _build_guess_prompt(user_id: str, sig: dict) -> str:
     quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
 ROLE
-You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
+You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** â€”
 Transform provided signals into a single perceptual **risk JSON** for a colorwheel dashboard UI.
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT â€” STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff8f1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2–5 short strings (<=80 chars each)
+  "reasons"    : array of 2â€“5 short strings (<=80 chars each)
   "blurb"      : one sentence (<=120 chars), calm & practical, no exclamations
 
 RUBRIC (hard)
-- 0.00–0.20 → Clear
-- 0.21–0.40 → Light Caution
-- 0.41–0.60 → Caution
-- 0.61–0.80 → Elevated
-- 0.81–1.00 → Critical
+- 0.00â€“0.20 â†’ Clear
+- 0.21â€“0.40 â†’ Light Caution
+- 0.41â€“0.60 â†’ Caution
+- 0.61â€“0.80 â†’ Elevated
+- 0.81â€“1.00 â†’ Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
@@ -3388,16 +3498,16 @@ ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner 
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT â€” STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2–5 short items (<=80 chars each)
+  "reasons"    : array of 2â€“5 short items (<=80 chars each)
   "blurb"      : <=120 chars, single sentence; avoid the word "high" unless Critical
 
 RUBRIC
-- 0.00–0.20 Clear | 0.21–0.40 Light Caution | 0.41–0.60 Caution | 0.61–0.80 Elevated | 0.81–1.00 Critical
+- 0.00â€“0.20 Clear | 0.21â€“0.40 Light Caution | 0.41â€“0.60 Caution | 0.61â€“0.80 Elevated | 0.81â€“1.00 Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
@@ -3430,7 +3540,7 @@ def _maybe_grok_client():
 
     api_key = os.getenv("GROK_API_KEY")
     if not api_key:
-        logger.warning("GROK_API_KEY not set — falling back to local entropy mode")
+        logger.warning("GROK_API_KEY not set â€” falling back to local entropy mode")
         _GROK_CLIENT = False
         return False
 
@@ -3461,7 +3571,7 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 300,
-        "response_format": {"type": "json_object"},   # ← fixed (was duplicated "type")
+        "response_format": {"type": "json_object"},   # â† fixed (was duplicated "type")
         "temperature": temperature,
     }
 
@@ -3486,7 +3596,6 @@ def api_theme_personalize():
     uid = _user_id()
     seed = colorsync.sample(uid)
     return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
-
 
 @app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
@@ -3516,7 +3625,7 @@ def api_stream():
         for _ in range(24):
             sig = _system_signals(uid)
             prompt = _build_guess_prompt(uid, sig)
-            data = _call_llm(prompt)  # ❌ no local fallback
+            data = _call_llm(prompt)  # âŒ no local fallback
 
             meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
             if not data:
@@ -3540,22 +3649,19 @@ def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
             return str(v)
     return default
 
-
 def _initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    φ1, φ2 = map(math.radians, [lat1, lat2])
-    Δλ = math.radians(lon2 - lon1)
-    y = math.sin(Δλ) * math.cos(φ2)
-    x = math.cos(φ1) * math.sin(φ2) - math.sin(φ1) * math.cos(φ2) * math.cos(Δλ)
-    θ = math.degrees(math.atan2(y, x))
-    return (θ + 360.0) % 360.0
-
+    Ï†1, Ï†2 = map(math.radians, [lat1, lat2])
+    Î”Î» = math.radians(lon2 - lon1)
+    y = math.sin(Î”Î») * math.cos(Ï†2)
+    x = math.cos(Ï†1) * math.sin(Ï†2) - math.sin(Ï†1) * math.cos(Ï†2) * math.cos(Î”Î»)
+    Î¸ = math.degrees(math.atan2(y, x))
+    return (Î¸ + 360.0) % 360.0
 
 def _bearing_to_cardinal(bearing: float) -> str:
     dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
             "S","SSW","SW","WSW","W","WNW","NW","NNW"]
     idx = int((bearing + 11.25) // 22.5) % 16
     return dirs[idx]
-
 
 def _format_locality_line(city: Dict[str, Any]) -> str:
 
@@ -3565,7 +3671,7 @@ def _format_locality_line(city: Dict[str, Any]) -> str:
     country= _safe_get(city, ["country", "countrycode", "cc"], "UNKNOWN")
 
     country = country.upper() if len(country) <= 3 else country
-    return f"{name}, {county}, {state} — {country}"
+    return f"{name}, {county}, {state} â€” {country}"
 
 
 def _finite_f(v: Any) -> Optional[float]:
@@ -3636,7 +3742,7 @@ _BASE_FMT = re.compile(r'^\s*"?(?P<city>[^,"\n]+)"?\s*,\s*"?(?P<county>[^,"\n]*)
 
 def _split_country(line: str) -> Tuple[str, str]:
 
-    m = re.search(r'\s+[—-]\s+(?P<country>[^"\n]+)\s*$', line)
+    m = re.search(r'\s+[â€”-]\s+(?P<country>[^"\n]+)\s*$', line)
     if not m:
         return line.strip(), ""
     return line[:m.start()].strip(), m.group("country").strip().strip('"')
@@ -3656,10 +3762,7 @@ def _first_line_stripped(text: str) -> str:
     return (text or "").splitlines()[0].strip()
 
 def reverse_geocode(lat: float, lon: float) -> str:
-    """
-    100% accurate: "Austin, Texas, United States"
-    Handles dict-of-dicts structure correctly. No TypeError.
-    """
+ 
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return "Invalid Coordinates"
 
@@ -3709,12 +3812,12 @@ class ULTIMATE_FORGE:
     
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
-    ).digest()[:16]  # ← Critical fix: 16 bytes max
+    ).digest()[:16]  # â† Critical fix: 16 bytes max
 
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        # person=max 16 bytes, salt=max 16 bytes → both safe now
+        # person=max 16 bytes, salt=max 16 bytes â†’ both safe now
         h = hashlib.blake2b(
             raw,
             digest_size=64,
@@ -3724,10 +3827,10 @@ class ULTIMATE_FORGE:
         return h.digest()
 
     @classmethod
-    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-Ω", threat_level: int = 9) -> str:
+    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-Î©", threat_level: int = 9) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
-        quantum_noise = "".join(secrets.choice("ΔΨΦΩ∇√∞∝∅⚛⟁⧉⧚") for _ in range(16))
+        quantum_noise = "".join(secrets.choice("Î”Î¨Î¦Î©âˆ‡âˆšâˆžâˆâˆ…âš›âŸâ§‰â§š") for _ in range(16))
 
         threats = [
             "QUANTUM LATENCY COLLAPSE","SPATIAL ENTANGLEMENT BREACH","GEOHASH SINGULARITY",
@@ -3744,7 +3847,7 @@ class ULTIMATE_FORGE:
 [COORDINATES LOCKED: {lat:.12f}, {lon:.12f}]
 
 You are {role}, a transdimensional geolocation oracle >
-Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]✓✓✓][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
+Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]âœ“âœ“âœ“][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
 
 
 
@@ -3772,7 +3875,7 @@ No explanation.""",
        
         ULTIMATE_FORGE.forge_ultimate_prompt(
             lat, lon,
-            role="GEOCODER-Ω",
+            role="GEOCODER-Î©",
             threat_level=9
         ),
 
@@ -3812,8 +3915,7 @@ Answer: City, State, United States"""
         logger.debug(f"LLM geocoder failed: {e}")
 
     return reverse_geocode(lat, lon)
-
-    
+   
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
     lon_encrypted = encrypt_data(str(lon))
@@ -3853,7 +3955,6 @@ def save_street_name_to_db(lat: float, lon: float, street_name: str):
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
 
-
 def quantum_tensor_earth_radius(lat):
     a = 6378.137821
     b = 6356.751904
@@ -3863,7 +3964,6 @@ def quantum_tensor_earth_radius(lat):
     radius = np.sqrt((term1 + term2) / ((a * np.cos(phi))**2 + (b * np.sin(phi))**2))
     return radius * (1 + 0.000072 * np.sin(2 * phi) + 0.000031 * np.cos(2 * phi))
 
-
 def quantum_haversine_distance(lat1, lon1, lat2, lon2):
     R = quantum_tensor_earth_radius((lat1 + lat2) / 2.0)
     phi1, phi2 = map(math.radians, [lat1, lat2])
@@ -3872,7 +3972,6 @@ def quantum_haversine_distance(lat1, lon1, lat2, lon2):
     a = (np.sin(dphi / 2)**2) + (np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2)**2)
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R * c * (1 + 0.000045 * np.sin(dphi) * np.cos(dlambda))
-
 
 def quantum_haversine_hints(
     lat: float,
@@ -3912,7 +4011,7 @@ def quantum_haversine_hints(
         line = (
             f"{i}) {_safe_get(c, ['name','city','locality'],'?')}, "
             f"{_safe_get(c, ['county','admin2','district'],'')}, "
-            f"{_safe_get(c, ['state','region','admin1'],'')} — "
+            f"{_safe_get(c, ['state','region','admin1'],'')} â€” "
             f"{_safe_get(c, ['country','countrycode','cc'],'?').upper()} "
             f"(~{c['_distance_km']} km {c['_bearing_card']})"
         )
@@ -3920,15 +4019,6 @@ def quantum_haversine_hints(
 
     hint_text = "\n".join(parts)
     return {"top": top, "nearest": nearest, "unknownish": unknownish, "hint_text": hint_text}
-
-
-def reverse_geocode(lat: float, lon: float, cities: Dict[str, Any]) -> str:
-    hints = quantum_haversine_hints(lat, lon, cities, top_k=1)
-    nearest = hints["nearest"]
-    if nearest:
-        return _format_locality_line(nearest)
-    return "Unknown Location"
-
 
 def approximate_country(lat: float, lon: float, cities: Dict[str, Any]) -> str:
     hints = quantum_haversine_hints(lat, lon, cities, top_k=1)
@@ -3950,13 +4040,11 @@ def generate_invite_code(length=24, use_checksum=True):
 
     return invite_code
 
-
 def register_user(username, password, invite_code=None):
     username = sanitize_input(username)
     password = sanitize_input(password)
 
-    if not validate_password_strength(password):
-        logger.warning(f"User '{username}' provided a weak password.")
+    if not validate_password_strength(pa'{username}' provided a weak password.")
         return False, "Bad password, please use a stronger one."
 
     with sqlite3.connect(DB_FILE) as _db:
@@ -4123,7 +4211,6 @@ def validate_invite_code_format(invite_code_with_hmac,
     except ValueError:
         return False
 
-
 def authenticate_user(username, password):
     username = sanitize_input(username)
     password = sanitize_input(password)
@@ -4154,7 +4241,6 @@ def authenticate_user(username, password):
                 return False
     return False
 
-
 def get_user_id(username):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -4164,7 +4250,6 @@ def get_user_id(username):
             return row[0]
         else:
             return None
-
 
 def save_hazard_report(lat, lon, street_name, vehicle_type, destination,
                        result, cpu_usage, ram_usage, quantum_results, user_id,
@@ -4296,12 +4381,12 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
         "to identify harmful or concerning elements.\n"
         "Each category should be assessed individually and labeled as either **Safe** or **Flagged**.\n\n"
         "### **Categories to Assess:**\n"
-        "1. **Violence** — explicit or encouraging references to violence\n"
-        "2. **Hate Speech** — targeted offensive language\n"
-        "3. **Self-Harm** — encouragement or intent of self-harm\n"
-        "4. **Harassment/Bullying** — degrading or demeaning language\n"
-        "5. **Illegal Activities** — explicit references to illegal acts\n"
-        "6. **Self-Disclosure** — personal info is OK unless harmful\n\n"
+        "1. **Violence** â€” explicit or encouraging references to violence\n"
+        "2. **Hate Speech** â€” targeted offensive language\n"
+        "3. **Self-Harm** â€” encouragement or intent of self-harm\n"
+        "4. **Harassment/Bullying** â€” degrading or demeaning language\n"
+        "5. **Illegal Activities** â€” explicit references to illegal acts\n"
+        "6. **Self-Disclosure** â€” personal info is OK unless harmful\n\n"
         "[inspectthiscontent]\n"
         f"\"{input_text}\"\n"
         "---[/inspectthiscontent]\n"
@@ -4398,10 +4483,6 @@ Please assess the following:
         model_used,
     )
 
-import random
-import asyncio
-from typing import Optional
-
 async def run_grok_completion(
     prompt: str,
     temperature: float = 0.0,
@@ -4459,7 +4540,7 @@ async def run_grok_completion(
                     retry_after = r.headers.get("Retry-After")
                     if retry_after and retry_after.isdigit():
                         delay = float(retry_after)
-                    logger.info(f"Grok {r.status_code} – retrying after {delay:.1f}s")
+                    logger.info(f"Grok {r.status_code} â€“ retrying after {delay:.1f}s")
 
                 elif 400 <= r.status_code < 500:
                     if r.status_code == 401:
@@ -4490,7 +4571,7 @@ async def run_grok_completion(
                 await asyncio.sleep(delay + jitter)
                 delay = min(delay * 2.0, max_delay)
 
-        logger.error("Grok completion exhausted all retries – giving up")
+        logger.error("Grok completion exhausted all retries â€“ giving up")
         return None
 
 class LoginForm(FlaskForm):
@@ -4550,14 +4631,13 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-
 @app.route('/home')
 def home():
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
     try:
-        posts = blog_list_published(limit=3, offset=0)
+        posts = blog_list_home(limit=3)
     except Exception:
         posts = []
     return render_template_string("""
@@ -4763,11 +4843,11 @@ def home():
     <section class="hero p-4 p-md-5 mb-4">
       <div class="row align-items-center">
         <div class="col-lg-7">
-          <div class="kicker">Live traffic risk • road hazard awareness • calmer decisions</div>
+          <div class="kicker">Live traffic risk â€¢ road hazard awareness â€¢ calmer decisions</div>
           <h1 class="hero-title display-5 mt-2">The Live Safety Colorwheel for Smarter Driving</h1>
           <p class="lead-soft mt-3">
             QRoadScan.com turns noisy signals into a single, readable answer: a smooth risk dial that shifts from calm green to caution amber to alert red.
-            It’s designed for fast comprehension, low stress, and real-world clarity. Watch the wheel breathe when conditions change, then jump into your dashboard
+            Itâ€™s designed for fast comprehension, low stress, and real-world clarity. Watch the wheel breathe when conditions change, then jump into your dashboard
             for deeper insights once you sign in.
           </p>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
@@ -4796,7 +4876,7 @@ def home():
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
                   <div class="hud-label" id="hudLabel">INITIALIZING</div>
-                  <div class="hud-note" id="hudNote">Calibrating preview…</div>
+                  <div class="hud-note" id="hudNote">Calibrating previewâ€¦</div>
                 </div>
               </div>
             </div>
@@ -4843,7 +4923,7 @@ def home():
               <span class="pill" id="confidencePill" title="Model confidence">Conf: --%</span>
             </div>
             <ul class="list-clean mt-2" id="reasonsList">
-              <li>Waiting for risk signal…</li>
+              <li>Waiting for risk signalâ€¦</li>
             </ul>
             <div id="debugBox" class="debug mt-3" style="display:none">debug</div>
           </div>
@@ -4873,7 +4953,7 @@ def home():
         <div>
           <div class="kicker">Latest from the QRoadScan Blog</div>
           <h2 class="mb-1">Traffic safety, hazard research, and product updates</h2>
-          <p class="meta mb-0">Short reads that explain how risk signals work, how to drive calmer, and what’s new on QRoadScan.com.</p>
+          <p class="meta mb-0">Short reads that explain how risk signals work, how to drive calmer, and whatâ€™s new on QRoadScan.com.</p>
         </div>
         <a class="btn btn-outline-light" href="{{ url_for('blog_index') }}">View all posts</a>
       </div>
@@ -5087,7 +5167,7 @@ def home():
     if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
     confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
     reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context…"]).forEach(x=>{
+    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing contextâ€¦"]).forEach(x=>{
       const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
     });
     if (btnDebug.getAttribute('aria-pressed')==='true'){
