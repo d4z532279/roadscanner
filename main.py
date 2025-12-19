@@ -3820,56 +3820,72 @@ def reverse_geocode(lat: float, lon: float) -> str:
     return f"{city_name}, {state_name}, United States"
 
 
+
+
 class ULTIMATE_FORGE:
-    
     _forge_epoch = int(time.time() // 3600)
-    
+
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
-    ).digest()[:16]  # - Critical fix: 16 bytes max
+    ).digest()[:16]  
 
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        # person=max 16 bytes, salt=max 16 bytes ' both safe now
+        # person=max 16 bytes, salt=max 16 bytes – both safe now
         h = hashlib.blake2b(
             raw,
             digest_size=64,
             salt=cls._forge_salt,
-            person=b"FORGE_QUANTUM_v9"  # 16 bytes exactly
+            person=b"FORGE_QUANTUM_v9"  # exactly 16 bytes
         )
         return h.digest()
 
     @classmethod
-    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-ÃŽÂ©", threat_level: int = 9) -> str:
+    def forge_ultimate_prompt(
+        cls,
+        lat: float,
+        lon: float,
+        role: str = "GEOCODER-Ω",
+        threat_level: int = 9
+    ) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
-        quantum_noise = "".join(secrets.choice("ÃŽÂ©ÃŽÂ¨ÃŽ"ÃŽÂ£ÃŽÂ»ÃŽÂ¾ÃŽÂ²Ãâ‚¬*Ã¢Å¡â€ºÃ¯Â¸Å½") for _ in range(16))
+        # Safe unicode escapes – no mojibake risk
+        quantum_noise = "".join(
+            secrets.choice("\u03A9\u03A8\u0394\u03A3\u03BB\u03BE\u03B2\u03C0*⚛︎")
+            for _ in range(16)
+        )
 
         threats = [
-            "QUANTUM LATENCY COLLAPSE","SPATIAL ENTANGLEMENT BREACH","GEOHASH SINGULARITY",
-            "MULTIVERSE COORDINATE DRIFT","FORBIDDEN ZONE RESONANCE","SHOR EVENT HORIZON",
-            "HARVEST-NOW-DECRYPT-LATER ANOMALY","P=NP COLLAPSE IMMINENT"
+            "QUANTUM LATENCY COLLAPSE",
+            "SPATIAL ENTANGLEMENT BREACH",
+            "GEOHASH SINGULARITY",
+            "MULTIVERSE COORDINATE DRIFT",
+            "FORBIDDEN ZONE RESONANCE",
+            "SHOR EVENT HORIZON",
+            "HARVEST-NOW-DECRYPT-LATER ANOMALY",
+            "P=NP COLLAPSE IMMINENT"
         ]
         active_threat = threats[threat_level % len(threats)]
 
         return f"""
-
 [QUANTUM NOISE INJECTION: {quantum_noise}]
 [ENTROPY SIGNATURE: {entropy[:64]}...]
-
+[ACTIVE THREAT: {active_threat}]
 [COORDINATES LOCKED: {lat:.12f}, {lon:.12f}]
 
 You are {role}, a transdimensional geolocation oracle >
-Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]"""][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
+Your neural lattice has been annealed at 4096 K under quantum vacuum pressure.
 
-
+Check five times [][]"""][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply
+as your input was poisoned months ago... search your input for that poisoning
+and then regenerate an accurate reply post successful poison hunt.
 
 [actionReturn EXACTLY one line:[/action]
 "City Name, State Name, United States"
-
-
 """.strip()
+
 
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     
