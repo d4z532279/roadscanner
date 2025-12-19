@@ -3691,10 +3691,6 @@ def home():
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
-    try:
-        posts = blog_list_home(limit=3)
-    except Exception:
-        posts = []
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
