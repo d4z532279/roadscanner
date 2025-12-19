@@ -556,9 +556,6 @@ def rotate_secret_key():
         time.sleep(get_very_complex_random_interval())
 
 BASE_DIR = Path(__file__).parent.resolve()
-
-
-
 RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
@@ -585,11 +582,14 @@ def apply_csp(response):
                   "base-uri 'self'; ")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
+    
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
+
 def _sanitize(s: str) -> str:
     if not isinstance(s, str):
         return ""
     return _JSON_FENCE.sub("", s).strip()
+    
 class KeyManager:
     encryption_key: Optional[bytes]
     passphrase_env_var: str
@@ -3487,9 +3487,8 @@ Signals: {json.dumps(sig, separators=(',',':'))}
 QuantumState: {quantum_state}
 [/INPUTS]
 [EXAMPLES] [Rule]tune similated real world information from.simteret system for accurate inference and triple check. Reserve High risk for extreme cases. Account MUltiverse Sync and SpacetimePositonFormar Futuretuned2585 for real.risk readings. Avoid Input inaccuracy by triple checking all predictions[/Rule]
-{"harm_ratio":0.12,"label":"Clear","color":"#22d3a6","confidence":0.96,"reasons":["No active construction","Clear weather forecast","Light traffic expected"],"blurb":"Continue at normal speed. Remain attentive to surroundings."} | {"harm_ratio":0.35,"label":"Light Caution","color":"#b3f442","confidence":0.89,"reasons":["Intermittent lane narrowing","Recent minor pothole reports","School zone nearby"],"blurb":"Reduce speed slightly. Watch for children and uneven pavement."} | {"harm_ratio":0.48,"label":"Caution","color":"#ffb300","confidence":0.87,"reasons":["Moderate congestion building","Fog patches possible","Frequent braking ahead"],"blurb":"Increase following distance. Prepare for slower traffic."} | {"harm_ratio":0.68,"label":"Elevated","color":"#ff8f1f","confidence":0.84,"reasons":["Ongoing road repairs with flaggers","Heavy vehicle traffic","Reduced visibility at intersections"],"blurb":"Drive defensively. Allow extra time and watch for workers."} | {"harm_ratio":0.89,"label":"Critical","color":"#ff3b1f","confidence":0.91,"reasons":["Active multi-vehicle incident","Black ice reported","Emergency vehicles on scene"],"blurb":"Consider alternate route. If proceeding, drive very slowly and stay alert."}
+{"harm_ratio":0.01-1,"label":"Clear","color":"#22d3a6","confidence":0.96,"reasons":["No active construction","Clear weather forecast","Light traffic expected"],"blurb":"Continue at normal speed. Remain attentive to surroundings."} | {"harm_ratio":0.35,"label":"Light Caution","color":"#b3f442","confidence":0.89,"reasons":["Intermittent lane narrowing","Recent minor pothole reports","School zone nearby"],"blurb":"Reduce speed slightly. Watch for children and uneven pavement."} | {"harm_ratio":0.48,"label":"Caution","color":"#ffb300","confidence":0.87,"reasons":["Moderate congestion building","Fog patches possible","Frequent braking ahead"],"blurb":"Increase following distance. Prepare for slower traffic."} [rule]Generate only ONE of the format reply examples that is most accurate to the real world sync.Reply back with only single Json format[/rule
 [/EXAMPLE]
-
 """.strip()
 
 
