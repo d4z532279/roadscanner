@@ -4635,13 +4635,13 @@ def home():
     <section class="hero p-4 p-md-5 mb-4">
       <div class="row align-items-center">
         <div class="col-lg-7">
-          <h1 class="hero-title display-5">Risk Colorwheel — Perceptual, Personal, Live</h1>
+          <h1 class="hero-title display-5">Quantum Road Scanner QRoadScan.com</h1>
           <p class="lead-soft mt-3">
-            Meet your <strong>LLM-guided dial</strong>. The wheel blends many signals into a single reading:
-            a smooth <em>harm ratio</em> from tranquil green → amber drift → alert crimson. In <em>Guess</em> mode,
-            the server (via <code>psutil</code>) samples CPU/RAM & jitter entropy as context; in <em>Route</em> mode,
-            you add coordinates so the model can reason about the trip. The wheel’s <strong>breathing</strong>
-            changes with risk—slower & softer when clear, deeper & brisk when elevated.
+            Quantum Road Scanner provides real world safety inference insights by digging into Quantum and AI risk modeling for vehicle routes. <strong>AI powered dashwheel</strong>. Our wheel syncs up to the many signals you may encounter on your vehicle's route and provides a metered safety signal via the DashWheel
+            a smooth <em>harm ratio</em> from tranquil green → amber drift → alert crimson.
+            
+            You can opt in via login and our model will base the scan from gps coordinates to enhance reasoning capability of the trip. 
+            The DashWheel changes color to display your current routes risk profile.
           </p>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
             <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
@@ -4665,7 +4665,7 @@ def home():
               </div>
             </div>
           </div>
-          <p class="meta mt-2">Tip: if your OS has “Reduce Motion”, animations automatically calm down.</p>
+          <p class="meta mt-2">Developed by Graylanj , a former Chatgpt Alpha Model and IBM Quantum researcher.</p>
         </div>
       </div>
     </section>
@@ -4674,36 +4674,28 @@ def home():
     <section class="card-g p-4 p-md-5 mb-4">
       <div class="wheel-wrap">
         <div>
-          <h3 class="mb-2">How it decides</h3>
+          <h3 class="mb-2">How it works</h3>
           <p class="meta">
-            We call the LLM in two ways and always require strict JSON back. A lightweight worker smooths noise,
-            and the wheel renders a perceptual color ramp with a risk-linked breathing halo and ring glow.
+            Generate Live Risk Reports using Advanced Risk Simulations. Experiance the future of road intelligence predictions using the Grok 4.1 powered quantum AI model.
+            
           </p>
           <ul class="list-clean">
-            <li><strong>LLM Guess</strong> — server bundles <code>psutil</code> CPU %, RAM %, loadavg, and a tiny entropy sketch; no destination.</li>
-            <li><strong>LLM Route</strong> — includes <code>lat/lon → dest_lat/dest_lon</code> so the LLM can reason about the segment you care about.</li>
+            <li><strong>LLM Guess</strong> — server bundles <code>psutil</code> CPU %, RAM %, loadavg, and entropic AI sim for live risk prediction.</li>
+            
           </ul>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.7rem">
             <span class="pill">Source</span>
             <div class="seg" role="tablist" aria-label="Risk source">
               <button id="btnGuess" role="tab" aria-selected="true" aria-pressed="true" title="No destination; PSUTIL pulse only">LLM Guess</button>
-              <button id="btnRoute" role="tab" aria-selected="false" aria-pressed="false">LLM Route</button>
-              <button id="btnHybrid" role="tab" aria-selected="false" aria-pressed="false" title="Blend Guess+Route if both available">Hybrid</button>
+              
+             
             </div>
             <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
             <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
             <button id="btnDebug" class="btn btn-sm btn-outline-light" aria-pressed="false">Debug: Off</button>
           </div>
 
-          <form id="routeForm" class="mt-3" style="display:none">
-            <div class="d-flex flex-wrap" style="gap:.5rem">
-              <input id="lat" class="form-control form-control-sm" style="width:140px" placeholder="lat">
-              <input id="lon" class="form-control form-control-sm" style="width:140px" placeholder="lon">
-              <input id="dlat" class="form-control form-control-sm" style="width:140px" placeholder="dest lat">
-              <input id="dlon" class="form-control form-control-sm" style="width:140px" placeholder="dest lon">
-              <button id="btnRouteFetch" class="btn btn-sm btn-light">Fetch Route Risk</button>
-            </div>
-          </form>
+    
         </div>
 
         <div>
