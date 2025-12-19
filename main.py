@@ -4876,7 +4876,7 @@ def home():
             <div class="wheel-hud">
               <canvas id="wheelCanvas"></canvas>
               <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
-              <div class="hud-center"
+              <div class="hud-center">
                 <div class="hud-ring"></div>
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
