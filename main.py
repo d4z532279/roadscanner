@@ -3043,77 +3043,53 @@ def healthz():
     return "ok", 200
 
 def delete_expired_data():
+    import re
+    def _regexp(pattern, item):
+        if item is None:
+            return 0
+        return 1 if re.search(pattern, item) else 0
     while True:
-        now = datetime.now()
-        expiration_time = now - timedelta(hours=EXPIRATION_HOURS)
-        expiration_str = expiration_time.strftime('%Y-%m-%d %H:%M:%S')
-
+        expiration_str = (datetime.utcnow() - timedelta(hours=EXPIRATION_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
         try:
             with sqlite3.connect(DB_FILE) as db:
-                cursor = db.cursor()
-
-                db.execute("BEGIN")
-
-
-                cursor.execute("PRAGMA table_info(hazard_reports)")
-                hazard_columns = {info[1] for info in cursor.fetchall()}
-                if all(col in hazard_columns for col in [
-                        "latitude", "longitude", "street_name", "vehicle_type",
-                        "destination", "result", "cpu_usage", "ram_usage",
-                        "quantum_results", "risk_level", "timestamp"
-                ]):
-                    cursor.execute(
-                        "SELECT id FROM hazard_reports WHERE timestamp <= ?",
-                        (expiration_str,))
-                    expired_hazard_ids = [row[0] for row in cursor.fetchall()]
-
-                    overwrite_hazard_reports_by_timestamp(cursor, expiration_str, passes=7)
-                    cursor.execute(
-                        "DELETE FROM hazard_reports WHERE timestamp <= ?",
-                        (expiration_str,))
-                    logger.debug(
-                        f"Deleted expired hazard_reports IDs: {expired_hazard_ids}"
-                    )
+                db.row_factory = sqlite3.Row
+                db.create_function("REGEXP", 2, _regexp)
+                cur = db.cursor()
+                cur.execute("BEGIN IMMEDIATE")
+                cur.execute("PRAGMA table_info(hazard_reports)")
+                hazard_cols = {r["name"] for r in cur.fetchall()}
+                required = {"latitude","longitude","street_name","vehicle_type","destination","result","cpu_usage","ram_usage","quantum_results","risk_level","timestamp"}
+                if required.issubset(hazard_cols):
+                    cur.execute("SELECT id FROM hazard_reports WHERE timestamp <= ?", (expiration_str,))
+                    ids = [r["id"] for r in cur.fetchall()]
+                    overwrite_hazard_reports_by_timestamp(cur, expiration_str, passes=7)
+                    cur.execute("DELETE FROM hazard_reports WHERE timestamp <= ?", (expiration_str,))
+                    logger.debug("hazard_reports purged: %s", ids)
                 else:
-                    logger.warning(
-                        "Skipping hazard_reports: Missing required columns.")
-
-
-                cursor.execute("PRAGMA table_info(entropy_logs)")
-                entropy_columns = {info[1] for info in cursor.fetchall()}
-                if all(col in entropy_columns for col in ["id", "log", "pass_num", "timestamp"]):
-                    cursor.execute(
-                        "SELECT id FROM entropy_logs WHERE timestamp <= ?",
-                        (expiration_str,))
-                    expired_entropy_ids = [row[0] for row in cursor.fetchall()]
-
-                    overwrite_entropy_logs_by_timestamp(cursor, expiration_str, passes=7)
-                    cursor.execute(
-                        "DELETE FROM entropy_logs WHERE timestamp <= ?",
-                        (expiration_str,))
-                    logger.debug(
-                        f"Deleted expired entropy_logs IDs: {expired_entropy_ids}"
-                    )
+                    logger.warning("hazard_reports skipped – missing columns: %s", required - hazard_cols)
+                cur.execute("PRAGMA table_info(entropy_logs)")
+                entropy_cols = {r["name"] for r in cur.fetchall()}
+                required_entropy = {"id","log","pass_num","timestamp"}
+                if required_entropy.issubset(entropy_cols):
+                    cur.execute("SELECT id FROM entropy_logs WHERE timestamp <= ?", (expiration_str,))
+                    ids = [r["id"] for r in cur.fetchall()]
+                    overwrite_entropy_logs_by_timestamp(cur, expiration_str, passes=7)
+                    cur.execute("DELETE FROM entropy_logs WHERE timestamp <= ?", (expiration_str,))
+                    logger.debug("entropy_logs purged: %s", ids)
                 else:
-                    logger.warning(
-                        "Skipping entropy_logs: Missing required columns.")
-
+                    logger.warning("entropy_logs skipped – missing columns: %s", required_entropy - entropy_cols)
                 db.commit()
-
             try:
                 with sqlite3.connect(DB_FILE) as db:
-                    cursor = db.cursor()
                     for _ in range(3):
-                        cursor.execute("VACUUM")
-                logger.debug("Database triple VACUUM completed with sector randomization.")
+                        db.execute("VACUUM")
+                logger.debug("Database triple VACUUM completed.")
             except sqlite3.OperationalError as e:
-                logger.error(f"VACUUM failed: {e}", exc_info=True)
-
+                logger.error("VACUUM failed: %s", e, exc_info=True)
         except Exception as e:
-            logger.error(f"Failed to delete expired data: {e}", exc_info=True)
+            logger.error("delete_expired_data failed: %s", e, exc_info=True)
+        time.sleep(random.randint(5400, 10800))
 
-        interval = random.randint(5400, 10800)
-        time.sleep(interval)
 
 
 def delete_user_data(user_id):
