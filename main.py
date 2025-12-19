@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations 
 import logging
 import httpx
@@ -2723,6 +2724,28 @@ def blog_admin():
     }
     POSTS.forEach(p=>{
       const a = document.createElement("a");
+      a.href = "#";
+      a.className = "post-item";
+
+      const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured) === "1"));
+      const star = isFeatured ? "* " : "";
+      const featMeta = isFeatured ? ` - featured:${(p.featured_rank ?? 0)}` : "";
+
+      const title = (p.title || "Untitled");
+      const slug = (p.slug || "");
+      const status = (p.status || "draft");
+
+      a.innerHTML = `
+        <div style="font-weight:900">${star}${title}</div>
+        <div class="muted" style="font-size:.9rem">${slug} - ${status}${featMeta}</div>
+      `.trim();
+
+      a.onclick = async (e)=>{ e.preventDefault(); await loadPostById(p.id); };
+      box.appendChild(a);
+    });
+  }
+    POSTS.forEach(p=>{
+      const a = document.createElement("a");
       a.href="#";
       a.className="post-item";
       const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured)==="1"));
@@ -3491,7 +3514,7 @@ ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner 
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUTÃ‚Â STRICT JSON ONLY. Keys EXACTLY:
+OUTPUTÂ STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
@@ -4864,7 +4887,7 @@ def home():
             <div class="wheel-hud">
               <canvas id="wheelCanvas"></canvas>
               <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
-              <div class="hud-center"
+              <div class="hud-center">
                 <div class="hud-ring"></div>
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
@@ -5154,17 +5177,17 @@ def home():
 
   function setHUD(j){
     const pct = Math.round(clamp01(j.harm_ratio||0)*100);
-    hudNumber.textContent = pct + "%";
-    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
-    hudNote.textContent  = j.blurb || (pct<40?"Clear conditions detected":"Stay adaptive and scan");
+    if(hudNumber) hudNumber.textContent = pct + "%";
+    if(hudLabel) hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
+    if(hudNote) hudNote.textContent  = j.blurb || (pct<40?"Clear conditions detected":"Stay adaptive and scan");
     if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
-    confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
-    reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing contextÃ¢â‚¬Â¦"]).forEach(x=>{
-      const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
+    if(confidencePill) confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
+    if(reasonsList) reasonsList.innerHTML="";
+    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context..."]).forEach(x=>{
+      const li=document.createElement('li'); li.textContent=x; if(reasonsList) reasonsList.appendChild(li);
     });
     if (btnDebug.getAttribute('aria-pressed')==='true'){
-      debugBox.textContent = JSON.stringify(j, null, 2);
+      if(debugBox) debugBox.textContent = JSON.stringify(j, null, 2);
     }
   }
 
