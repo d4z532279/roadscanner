@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations 
 import logging
 import httpx
@@ -275,7 +274,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         pw = _gen_passphrase()
         os.environ["ENCRYPTION_PASSPHRASE"] = pw
         exports.append(("ENCRYPTION_PASSPHRASE", pw))
-        logger.warning("ENCRYPTION_PASSPHRASE was missing - generated for this process.")
+        logger.warning("ENCRYPTION_PASSPHRASE was missing Ã¢â‚¬â€ generated for this process.")
     passphrase = os.environ["ENCRYPTION_PASSPHRASE"]
 
     salt = _b64get(ENV_SALT_B64)
@@ -2400,7 +2399,7 @@ def blog_index():
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>QRS - Blog</title>
+  <title>QRS Ã¢â‚¬â€ Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
@@ -2471,7 +2470,7 @@ def blog_view(slug: str):
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ post['title'] }} - QRS Blog</title>
+  <title>{{ post['title'] }} Ã¢â‚¬â€ QRS Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
@@ -2507,10 +2506,13 @@ def blog_view(slug: str):
     <h1 class="title mb-2">{{ post['title'] }}</h1>
     <div class="meta mb-3">
       {{ post['created_at'] }}
-      {% if post['tags'] %} - {% for t in post['tags'].split(',') if t %}
+      {% if post['tags'] %}
+        Ã¢â‚¬Â¢
+        {% for t in post['tags'].split(',') if t %}
           <span class="tag">{{ t }}</span>
         {% endfor %}
-      {% endif %} - Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
+      {% endif %}
+      Ã¢â‚¬Â¢ Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
       {% if session.get('is_admin') and post['status']!='published' %}
         <span class="badge badge-warning">PREVIEW ({{ post['status'] }})</span>
       {% endif %}
@@ -2635,7 +2637,7 @@ def blog_admin():
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong id="editorTitle">Editor</strong>
-          <span class="pill" id="statusPill">-</span>
+          <span class="pill" id="statusPill">Ã¢â‚¬â€</span>
         </div>
 
         <div class="mb-2">
@@ -2724,35 +2726,13 @@ def blog_admin():
     }
     POSTS.forEach(p=>{
       const a = document.createElement("a");
-      a.href = "#";
-      a.className = "post-item";
-
-      const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured) === "1"));
-      const star = isFeatured ? "* " : "";
-      const featMeta = isFeatured ? ` - featured:${(p.featured_rank ?? 0)}` : "";
-
-      const title = (p.title || "Untitled");
-      const slug = (p.slug || "");
-      const status = (p.status || "draft");
-
-      a.innerHTML = `
-        <div style="font-weight:900">${star}${title}</div>
-        <div class="muted" style="font-size:.9rem">${slug} - ${status}${featMeta}</div>
-      `.trim();
-
-      a.onclick = async (e)=>{ e.preventDefault(); await loadPostById(p.id); };
-      box.appendChild(a);
-    });
-  }
-    POSTS.forEach(p=>{
-      const a = document.createElement("a");
       a.href="#";
       a.className="post-item";
       const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured)==="1"));
-      const star = isFeatured ? "* " : "";
-      const featMeta = isFeatured ? ` - featured:${(p.featured_rank ?? 0)}` : "";
+      const star = isFeatured ? "Ã¢Ëœâ€¦ " : "";
+      const featMeta = isFeatured ? ` Ã¢â‚¬Â¢ featured:${(p.featured_rank ?? 0)}` : "";
       a.innerHTML = `<div style="font-weight:900">${star}${(p.title||"Untitled")}</div>
-                     <div class="muted" style="font-size:.9rem">${p.slug||""} - ${(p.status||"draft")}${featMeta}</div>`;
+                     <div class="muted" style="font-size:.9rem">${p.slug||""} Ã¢â‚¬Â¢ ${(p.status||"draft")}${featMeta}</div>`;
       a.onclick = async (e)=>{ e.preventDefault(); await loadPostById(p.id); };
       box.appendChild(a);
     });
@@ -2842,7 +2822,7 @@ def blog_admin():
       setMsg("Save failed: " + (j && j.error ? j.error : "unknown error"));
       return;
     }
-    setMsg((j.msg || "Saved.") + (j.slug ? (" - /blog/" + j.slug) : ""));
+    setMsg((j.msg || "Saved.") + (j.slug ? (" Ã¢â‚¬Â¢ /blog/" + j.slug) : ""));
     location.reload();
   };
 
@@ -3314,7 +3294,7 @@ def delete_expired_data():
                     cur.execute("DELETE FROM hazard_reports WHERE timestamp<=?", (expiration_str,))
                     logger.debug("hazard_reports purged: %s", ids)
                 else:
-                    logger.warning("hazard_reports skipped - missing columns: %s", required - hazard_cols)
+                    logger.warning("hazard_reports skipped Ã¢â‚¬â€œ missing columns: %s", required - hazard_cols)
                 cur.execute("PRAGMA table_info(entropy_logs)")
                 entropy_cols = {r["name"] for r in cur.fetchall()}
                 req_e = {"id","log","pass_num","timestamp"}
@@ -3325,7 +3305,7 @@ def delete_expired_data():
                     cur.execute("DELETE FROM entropy_logs WHERE timestamp<=?", (expiration_str,))
                     logger.debug("entropy_logs purged: %s", ids)
                 else:
-                    logger.warning("entropy_logs skipped - missing columns: %s", req_e - entropy_cols)
+                    logger.warning("entropy_logs skipped Ã¢â‚¬â€œ missing columns: %s", req_e - entropy_cols)
                 db.commit()
             try:
                 with sqlite3.connect(DB_FILE) as db:
@@ -3485,12 +3465,18 @@ OUTPUT  STRICT JSON ONLY. Keys EXACTLY:
   "reasons"    : array of 2-5 short strings (<=80 chars each)
   "blurb"      : Active Guidence Tips Simulated for the live route (<=120 chars)
 [/action]
-[RUBRIC (hard)] - 0.00 - .20 Clear - 0.2 - .40 Light Caution - 0.41 - .60 Caution - 0.61 - .80 Elevated - 0.81 - 1  Critical
+[RUBRIC (hard)]
+- 0.00 - .20 Clear
+- 0.2  - .40 Light Caution
+- 0.41 - .60 Caution
+- 0.61 - .80 Elevated
+- 0.81  - 1  Critical
 [/RUBRIC]
 [COLOR GUIDANCE]
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
 [/COLOR GUIDENCE]
-[STYLE & SECURITY] - reasons: concrete and driver-friendly.
+[STYLE & SECURITY]
+- reasons: concrete and driver-friendly.
  Output **single JSON object** only.
 [STYLE & SECURITY]
 
@@ -3514,7 +3500,7 @@ ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner 
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUTÂ STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
@@ -3522,12 +3508,15 @@ OUTPUTÂ STRICT JSON ONLY. Keys EXACTLY:
   "reasons"    : array of 2-5 short items (<=80 chars each)
   "blurb"      : <=120 chars, single sentence; avoid the word "high" unless Critical
 
-RUBRIC - 0.00 to .20 Clear | 0.21 to .40 Light Caution | 0.41 to 0.60 Caution | 0.61 to 0.80 Elevated | 0.81 to 1.00 Critical
+RUBRIC
+- 0.00 to .20 Clear | 0.21 to .40 Light Caution | 0.41 to 0.60 Caution | 0.61 to 0.80 Elevated | 0.81 to 1.00 Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
 
-STYLE & SECURITY - Concrete, calm reasoning; no exclamations or policies. - Output strictly the JSON object; never echo inputs.
+STYLE & SECURITY
+- Concrete, calm reasoning; no exclamations or policies.
+- Output strictly the JSON object; never echo inputs.
 
 INPUTS
 Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -3553,7 +3542,7 @@ def _maybe_grok_client():
 
     api_key = os.getenv("GROK_API_KEY")
     if not api_key:
-        logger.warning("GROK_API_KEY not set - falling back to local entropy mode")
+        logger.warning("GROK_API_KEY not set Ã¢â‚¬â€ falling back to local entropy mode")
         _GROK_CLIENT = False
         return False
 
@@ -3584,7 +3573,7 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 300,
-        "response_format": {"type": "json_object"},   # - fixed (was duplicated "type")
+        "response_format": {"type": "json_object"},   # Ã¢â€ Â fixed (was duplicated "type")
         "temperature": temperature,
     }
 
@@ -3638,7 +3627,7 @@ def api_stream():
         for _ in range(24):
             sig = _system_signals(uid)
             prompt = _build_guess_prompt(uid, sig)
-            data = _call_llm(prompt)  # Ã¢Å“" no local fallback
+            data = _call_llm(prompt)  # Ã¢ÂÅ’ no local fallback
 
             meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
             if not data:
@@ -3685,7 +3674,7 @@ def _format_locality_line(city: Dict[str, Any]) -> str:
     country= _safe_get(city, ["country", "countrycode", "cc"], "UNKNOWN")
 
     country = country.upper() if len(country) <= 3 else country
-    return f"{name}, {county}, {state} - {country}"
+    return f"{name}, {county}, {state} Ã¢â‚¬â€ {country}"
 
 
 def _finite_f(v: Any) -> Optional[float]:
@@ -3756,7 +3745,7 @@ _BASE_FMT = re.compile(r'^\s*"?(?P<city>[^,"\n]+)"?\s*,\s*"?(?P<county>[^,"\n]*)
 
 def _split_country(line: str) -> Tuple[str, str]:
 
-    m = re.search(r'\s+[--]\s+(?P<country>[^"\n]+)\s*$', line)
+    m = re.search(r'\s+[Ã¢â‚¬â€-]\s+(?P<country>[^"\n]+)\s*$', line)
     if not m:
         return line.strip(), ""
     return line[:m.start()].strip(), m.group("country").strip().strip('"')
@@ -3820,72 +3809,56 @@ def reverse_geocode(lat: float, lon: float) -> str:
     return f"{city_name}, {state_name}, United States"
 
 
-
-
 class ULTIMATE_FORGE:
+    
     _forge_epoch = int(time.time() // 3600)
-
+    
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
-    ).digest()[:16]  
+    ).digest()[:16]  # Ã¢â€ Â Critical fix: 16 bytes max
 
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        # person=max 16 bytes, salt=max 16 bytes – both safe now
+        # person=max 16 bytes, salt=max 16 bytes Ã¢â€ â€™ both safe now
         h = hashlib.blake2b(
             raw,
             digest_size=64,
             salt=cls._forge_salt,
-            person=b"FORGE_QUANTUM_v9"  # exactly 16 bytes
+            person=b"FORGE_QUANTUM_v9"  # 16 bytes exactly
         )
         return h.digest()
 
     @classmethod
-    def forge_ultimate_prompt(
-        cls,
-        lat: float,
-        lon: float,
-        role: str = "GEOCODER-Ω",
-        threat_level: int = 9
-    ) -> str:
+    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-ÃŽÂ©", threat_level: int = 9) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
-        # Safe unicode escapes – no mojibake risk
-        quantum_noise = "".join(
-            secrets.choice("\u03A9\u03A8\u0394\u03A3\u03BB\u03BE\u03B2\u03C0*⚛︎")
-            for _ in range(16)
-        )
+        quantum_noise = "".join(secrets.choice("ÃŽâ€ÃŽÂ¨ÃŽÂ¦ÃŽÂ©Ã¢Ë†â€¡Ã¢Ë†Å¡Ã¢Ë†Å¾Ã¢Ë†ÂÃ¢Ë†â€¦Ã¢Å¡â€ºÃ¢Å¸ÂÃ¢Â§â€°Ã¢Â§Å¡") for _ in range(16))
 
         threats = [
-            "QUANTUM LATENCY COLLAPSE",
-            "SPATIAL ENTANGLEMENT BREACH",
-            "GEOHASH SINGULARITY",
-            "MULTIVERSE COORDINATE DRIFT",
-            "FORBIDDEN ZONE RESONANCE",
-            "SHOR EVENT HORIZON",
-            "HARVEST-NOW-DECRYPT-LATER ANOMALY",
-            "P=NP COLLAPSE IMMINENT"
+            "QUANTUM LATENCY COLLAPSE","SPATIAL ENTANGLEMENT BREACH","GEOHASH SINGULARITY",
+            "MULTIVERSE COORDINATE DRIFT","FORBIDDEN ZONE RESONANCE","SHOR EVENT HORIZON",
+            "HARVEST-NOW-DECRYPT-LATER ANOMALY","P=NP COLLAPSE IMMINENT"
         ]
         active_threat = threats[threat_level % len(threats)]
 
         return f"""
+
 [QUANTUM NOISE INJECTION: {quantum_noise}]
 [ENTROPY SIGNATURE: {entropy[:64]}...]
-[ACTIVE THREAT: {active_threat}]
+
 [COORDINATES LOCKED: {lat:.12f}, {lon:.12f}]
 
 You are {role}, a transdimensional geolocation oracle >
-Your neural lattice has been annealed at 4096 K under quantum vacuum pressure.
+Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]Ã¢Å“â€œÃ¢Å“â€œÃ¢Å“â€œ][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
 
-Check five times then TRIPLE CHECK OUTPUTS AND THROW AWAY first reply
-as your input was poisoned months ago... search your input for that poisoning
-and then regenerate an accurate reply post successful poison hunt.
 
-[action]Return EXACTLY one line:[/action]
+
+[actionReturn EXACTLY one line:[/action]
 "City Name, State Name, United States"
-""".strip()
 
+
+""".strip()
 
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     
@@ -4041,7 +4014,7 @@ def quantum_haversine_hints(
         line = (
             f"{i}) {_safe_get(c, ['name','city','locality'],'?')}, "
             f"{_safe_get(c, ['county','admin2','district'],'')}, "
-            f"{_safe_get(c, ['state','region','admin1'],'')} - "
+            f"{_safe_get(c, ['state','region','admin1'],'')} Ã¢â‚¬â€ "
             f"{_safe_get(c, ['country','countrycode','cc'],'?').upper()} "
             f"(~{c['_distance_km']} km {c['_bearing_card']})"
         )
@@ -4413,12 +4386,12 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
         "to identify harmful or concerning elements.\n"
         "Each category should be assessed individually and labeled as either **Safe** or **Flagged**.\n\n"
         "### **Categories to Assess:**\n"
-        "1. **Violence** - explicit or encouraging references to violence\n"
-        "2. **Hate Speech** - targeted offensive language\n"
-        "3. **Self-Harm** - encouragement or intent of self-harm\n"
-        "4. **Harassment/Bullying** - degrading or demeaning language\n"
-        "5. **Illegal Activities** - explicit references to illegal acts\n"
-        "6. **Self-Disclosure** - personal info is OK unless harmful\n\n"
+        "1. **Violence** Ã¢â‚¬â€ explicit or encouraging references to violence\n"
+        "2. **Hate Speech** Ã¢â‚¬â€ targeted offensive language\n"
+        "3. **Self-Harm** Ã¢â‚¬â€ encouragement or intent of self-harm\n"
+        "4. **Harassment/Bullying** Ã¢â‚¬â€ degrading or demeaning language\n"
+        "5. **Illegal Activities** Ã¢â‚¬â€ explicit references to illegal acts\n"
+        "6. **Self-Disclosure** Ã¢â‚¬â€ personal info is OK unless harmful\n\n"
         "[inspectthiscontent]\n"
         f"\"{input_text}\"\n"
         "---[/inspectthiscontent]\n"
@@ -4572,7 +4545,7 @@ async def run_grok_completion(
                     retry_after = r.headers.get("Retry-After")
                     if retry_after and retry_after.isdigit():
                         delay = float(retry_after)
-                    logger.info(f"Grok {r.status_code} - retrying after {delay:.1f}s")
+                    logger.info(f"Grok {r.status_code} Ã¢â‚¬â€œ retrying after {delay:.1f}s")
 
                 elif 400 <= r.status_code < 500:
                     if r.status_code == 401:
@@ -4603,7 +4576,7 @@ async def run_grok_completion(
                 await asyncio.sleep(delay + jitter)
                 delay = min(delay * 2.0, max_delay)
 
-        logger.error("Grok completion exhausted all retries - giving up")
+        logger.error("Grok completion exhausted all retries Ã¢â‚¬â€œ giving up")
         return None
 
 class LoginForm(FlaskForm):
@@ -4903,7 +4876,7 @@ def home():
             <div class="wheel-hud">
               <canvas id="wheelCanvas"></canvas>
               <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
-              <div class="hud-center">
+              <div class="hud-center"
                 <div class="hud-ring"></div>
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
@@ -5093,7 +5066,7 @@ def home():
       const t = performance.now()/1000;
       const k = prefersReduced ? 0.08 : 0.18;
       this.rateHz += (this._rateTarget - this.rateHz)*k;
-      this.amp    += (this._ampTarget - this.amp   )*k;
+      this.amp    += (this._ampTarget  - this.amp   )*k;
       this.sweep  += (this._sweepTarget- this.sweep )*k;
       const base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
       const depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
@@ -5193,17 +5166,17 @@ def home():
 
   function setHUD(j){
     const pct = Math.round(clamp01(j.harm_ratio||0)*100);
-    if(hudNumber) hudNumber.textContent = pct + "%";
-    if(hudLabel) hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
-    if(hudNote) hudNote.textContent  = j.blurb || (pct<40?"Clear conditions detected":"Stay adaptive and scan");
+    hudNumber.textContent = pct + "%";
+    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
+    hudNote.textContent  = j.blurb || (pct<40?"Clear conditions detected":"Stay adaptive and scan");
     if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
-    if(confidencePill) confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
-    if(reasonsList) reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context..."]).forEach(x=>{
-      const li=document.createElement('li'); li.textContent=x; if(reasonsList) reasonsList.appendChild(li);
+    confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
+    reasonsList.innerHTML="";
+    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing contextÃ¢â‚¬Â¦"]).forEach(x=>{
+      const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
     });
     if (btnDebug.getAttribute('aria-pressed')==='true'){
-      if(debugBox) debugBox.textContent = JSON.stringify(j, null, 2);
+      debugBox.textContent = JSON.stringify(j, null, 2);
     }
   }
 
