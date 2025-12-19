@@ -2152,80 +2152,104 @@ def blog_slug_exists(slug: str, exclude_id: Optional[int]=None) -> bool:
             cur.execute("SELECT 1 FROM blog_posts WHERE slug=? LIMIT 1", (slug,))
         return cur.fetchone() is not None
         
-def blog_save(post_id: Optional[int], author_id: int, title_html: str, content_html: str, summary_html: str, tags_csv: str, status: str, slug_in: Optional[str]) -> tuple[bool, str, Optional[int], Optional[str]]:
-    status = (status or "draft").lower()
+def blog_save(
+    post_id: Optional[int],
+    author_id: int,
+    title_html: str,
+    content_html: str,
+    summary_html: str,
+    tags_csv: str,
+    status: str,
+    slug_in: Optional[str],
+) -> tuple[bool, str, Optional[int], Optional[str]]:
+    status = (status or "draft").strip().lower()
     if status not in ("draft", "published", "archived"):
         return False, "Invalid status", None, None
 
     title_html = sanitize_text(title_html, 160)
-    content_len_limit = 200_000
-    content_html = sanitize_html((content_html or "")[:content_len_limit])
-    summary_html = sanitize_html((summary_html or "")[:20_000])
-    tags_csv = sanitize_tags_csv(tags_csv)
+    content_html = sanitize_html(((content_html or "")[:200_000]))
+    summary_html = sanitize_html(((summary_html or "")[:20_000]))
 
-    if not title_html.strip():
+    raw_tags = (tags_csv or "").strip()
+    raw_tags = re.sub(r"[\r\n\t]+", " ", raw_tags)
+    raw_tags = re.sub(r"\s*,\s*", ",", raw_tags)
+    raw_tags = raw_tags.strip(", ")
+    tags_csv = raw_tags[:2000]
+
+    if not (title_html or "").strip():
         return False, "Title is required", None, None
-    if not content_html.strip():
+    if not (content_html or "").strip():
         return False, "Content is required", None, None
 
+    def _valid_slug_local(s: str) -> bool:
+        return bool(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", s or ""))
+
+    def _slugify_local(s: str) -> str:
+        s = re.sub(r"<[^>]+>", " ", s or "")
+        s = s.lower().strip()
+        s = re.sub(r"['\"`]+", "", s)
+        s = re.sub(r"[^a-z0-9]+", "-", s)
+        s = re.sub(r"^-+|-+$", "", s)
+        s = re.sub(r"-{2,}", "-", s)
+        if len(s) > 80:
+            s = s[:80]
+            s = re.sub(r"-+[^-]*$", "", s) or s.strip("-")
+        return s
+
     slug = (slug_in or "").strip().lower()
-    if slug and not _valid_slug(slug):
+    if slug and not _valid_slug_local(slug):
         return False, "Slug must be lowercase letters/numbers and hyphens", None, None
     if not slug:
-        slug = _slugify(re.sub(r"<[^>]+>", "", title_html))
-    if not _valid_slug(slug):
+        slug = _slugify_local(title_html)
+    if not _valid_slug_local(slug):
         return False, "Unable to derive a valid slug", None, None
-
-    if blog_slug_exists(slug, exclude_id=post_id or None):
-        slug = f"{slug}-{secrets.token_hex(2)}"
-        if not _valid_slug(slug):
-            return False, "Slug conflict; please edit slug", None, None
 
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     created_at = now
-    existing = None
-
-    def _sqlite_regexp(pattern: str, value: object) -> int:
-        try:
-            if pattern is None:
-                return 0
-            s = "" if value is None else str(value)
-            return 1 if re.search(str(pattern), s) else 0
-        except Exception:
-            return 0
-
-    if post_id:
-        with sqlite3.connect(DB_FILE) as db:
-            db.create_function("REGEXP", 2, _sqlite_regexp)
-            db.create_function("regexp", 2, _sqlite_regexp)
-            cur = db.cursor()
-            cur.execute("SELECT created_at FROM blog_posts WHERE id=? LIMIT 1", (int(post_id),))
-            row = cur.fetchone()
-            if row:
-                created_at = row[0]
-                existing = True
-            else:
-                existing = False
-
-    payload = _post_sig_payload(slug, title_html, content_html, summary_html, tags_csv, status, created_at, now)
-    sig_alg, sig_fp8, sig_val = _sign_post(payload)
-
-    title_enc = blog_encrypt("title", title_html, post_id)
-    content_enc = blog_encrypt("content", content_html, post_id)
-    summary_enc = blog_encrypt("summary", summary_html, post_id)
-    tags_enc = blog_encrypt("tags", tags_csv, post_id)
+    existing = False
 
     try:
         with sqlite3.connect(DB_FILE) as db:
-            db.create_function("REGEXP", 2, _sqlite_regexp)
-            db.create_function("regexp", 2, _sqlite_regexp)
             cur = db.cursor()
+            if post_id:
+                cur.execute("SELECT created_at FROM blog_posts WHERE id=? LIMIT 1", (int(post_id),))
+                row = cur.fetchone()
+                if row:
+                    created_at = row[0]
+                    existing = True
+                else:
+                    existing = False
+
+            def _slug_exists_local(s: str) -> bool:
+                if post_id:
+                    cur.execute("SELECT 1 FROM blog_posts WHERE slug=? AND id<>? LIMIT 1", (s, int(post_id)))
+                else:
+                    cur.execute("SELECT 1 FROM blog_posts WHERE slug=? LIMIT 1", (s,))
+                return cur.fetchone() is not None
+
+            if _slug_exists_local(slug):
+                for _ in range(6):
+                    candidate = f"{slug}-{secrets.token_hex(2)}"
+                    if _valid_slug_local(candidate) and not _slug_exists_local(candidate):
+                        slug = candidate
+                        break
+                if _slug_exists_local(slug):
+                    return False, "Slug conflict; please edit slug", None, None
+
+            payload = _post_sig_payload(slug, title_html, content_html, summary_html, tags_csv, status, created_at, now)
+            sig_alg, sig_fp8, sig_val = _sign_post(payload)
+
+            title_enc = blog_encrypt("title", title_html, post_id)
+            content_enc = blog_encrypt("content", content_html, post_id)
+            summary_enc = blog_encrypt("summary", summary_html, post_id)
+            tags_enc = blog_encrypt("tags", tags_csv, post_id)
 
             if existing:
                 cur.execute(
                     """
                     UPDATE blog_posts
-                    SET slug=?, title_enc=?, content_enc=?, summary_enc=?, tags_enc=?, status=?, updated_at=?, sig_alg=?, sig_pub_fp8=?, sig_val=?
+                    SET slug=?, title_enc=?, content_enc=?, summary_enc=?, tags_enc=?, status=?, updated_at=?,
+                        sig_alg=?, sig_pub_fp8=?, sig_val=?
                     WHERE id=?
                     """,
                     (slug, title_enc, content_enc, summary_enc, tags_enc, status, now, sig_alg, sig_fp8, sig_val, int(post_id)),
@@ -2233,46 +2257,36 @@ def blog_save(post_id: Optional[int], author_id: int, title_html: str, content_h
                 db.commit()
                 audit.append("blog_update", {"id": int(post_id), "slug": slug, "status": status}, actor=session.get("username") or "admin")
                 return True, "Updated", int(post_id), slug
-
-            cur.execute(
-                """
-                INSERT INTO blog_posts (slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (slug, title_enc, content_enc, summary_enc, tags_enc, status, created_at, now, int(author_id), sig_alg, sig_fp8, sig_val),
-            )
-            new_id = cur.lastrowid
-            db.commit()
-            audit.append("blog_create", {"id": int(new_id), "slug": slug, "status": status}, actor=session.get("username") or "admin")
-            return True, "Created", int(new_id), slug
-
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO blog_posts
+                      (slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (slug, title_enc, content_enc, summary_enc, tags_enc, status, created_at, now, int(author_id), sig_alg, sig_fp8, sig_val),
+                )
+                new_id = cur.lastrowid
+                db.commit()
+                audit.append("blog_create", {"id": int(new_id), "slug": slug, "status": status}, actor=session.get("username") or "admin")
+                return True, "Created", int(new_id), slug
     except Exception as e:
         logger.error(f"blog_save failed: {e}", exc_info=True)
         return False, "DB error", None, None
 
 
 def blog_delete(post_id: int) -> bool:
-    def _sqlite_regexp(pattern: str, value: object) -> int:
-        try:
-            if pattern is None:
-                return 0
-            s = "" if value is None else str(value)
-            return 1 if re.search(str(pattern), s) else 0
-        except Exception:
-            return 0
-
     try:
         with sqlite3.connect(DB_FILE) as db:
-            db.create_function("REGEXP", 2, _sqlite_regexp)
-            db.create_function("regexp", 2, _sqlite_regexp)
             cur = db.cursor()
             cur.execute("DELETE FROM blog_posts WHERE id=?", (int(post_id),))
             db.commit()
-            audit.append("blog_delete", {"id": int(post_id)}, actor=session.get("username") or "admin")
+        audit.append("blog_delete", {"id": int(post_id)}, actor=session.get("username") or "admin")
         return True
     except Exception as e:
         logger.error(f"blog_delete failed: {e}", exc_info=True)
         return False
+
 
 
 @app.get("/blog")
@@ -2412,8 +2426,6 @@ def blog_view(slug: str):
     """, post=post, sig_ok=sig_ok, accent=accent)
 
                 
-
-# --- CSRF helper (header -> json -> form) ---
 def _csrf_from_request():
     token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
     if not token:
