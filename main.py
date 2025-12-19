@@ -2470,7 +2470,7 @@ def blog_view(slug: str):
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ post['title'] }}QRoadScan.com Blog</title>
+  <title>{{ post['title'] }} Ã¢â‚¬â€ QRS Blog</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
@@ -2512,7 +2512,7 @@ def blog_view(slug: str):
           <span class="tag">{{ t }}</span>
         {% endfor %}
       {% endif %}
-      Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
+      Ã¢â‚¬Â¢ Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
       {% if session.get('is_admin') and post['status']!='published' %}
         <span class="badge badge-warning">PREVIEW ({{ post['status'] }})</span>
       {% endif %}
@@ -2692,49 +2692,51 @@ def blog_admin():
       </div>
     </div>
   </div>
-  
+
 <script>
-  function renderList() {
+  const POSTS = {{ items | tojson }};
+  const CSRF = (document.getElementById('csrf_token')?.value) ||
+               (document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')) || "";
+
+  const el = (id)=>document.getElementById(id);
+
+  const state = { id: null };
+
+  function setMsg(t){ el("msg").textContent = t || ""; }
+  function setStatusPill(){
+    const s = (el("status").value || "draft").toLowerCase();
+    el("statusPill").textContent = (s === "published") ? "Published" : (s === "archived") ? "Archived" : "Draft";
+  }
+
+  function normalizeSlug(s){
+    return (s||"")
+      .toLowerCase()
+      .trim()
+      .replace(/['"]/g,"")
+      .replace(/[^a-z0-9]+/g,"-")
+      .replace(/^-+|-+$/g,"");
+  }
+
+  function renderList(){
     const box = el("postList");
     box.innerHTML = "";
-
-    if (!POSTS || POSTS.length === 0) {
+    if(!POSTS || POSTS.length === 0){
       box.innerHTML = '<div class="muted p-2">No posts yet.</div>';
       return;
     }
-
-    POSTS.forEach((p) => {
+    POSTS.forEach(p=>{
       const a = document.createElement("a");
-      a.href = "#";
-      a.className = "post-item";
-
-      const isFeatured = !!(
-        p &&
-        (p.featured === 1 ||
-         p.featured === true ||
-         String(p.featured) === "1")
-      );
-
-      const star = isFeatured ? "★ " : "";
-      const featMeta = isFeatured ? ` featured:${p.featured_rank ?? 0}` : "";
-
-      a.innerHTML = `
-        <div style="font-weight:900">${star}${p.title || "Untitled"}</div>
-        <div class="muted" style="font-size:.9rem">
-          ${p.slug || ""} ${(p.status || "draft")}${featMeta}
-        </div>
-      `;
-
-      a.onclick = async (e) => {
-        e.preventDefault();
-        await loadPostById(p.id);
-      };
-
+      a.href="#";
+      a.className="post-item";
+      const isFeatured = !!(p && (p.featured === 1 || p.featured === true || String(p.featured)==="1"));
+      const star = isFeatured ? "Ã¢Ëœâ€¦ " : "";
+      const featMeta = isFeatured ? ` Ã¢â‚¬Â¢ featured:${(p.featured_rank ?? 0)}` : "";
+      a.innerHTML = `<div style="font-weight:900">${star}${(p.title||"Untitled")}</div>
+                     <div class="muted" style="font-size:.9rem">${p.slug||""} Ã¢â‚¬Â¢ ${(p.status||"draft")}${featMeta}</div>`;
+      a.onclick = async (e)=>{ e.preventDefault(); await loadPostById(p.id); };
       box.appendChild(a);
     });
   }
-
-
 
   function clearEditor(){
     state.id=null;
@@ -2813,27 +2815,23 @@ def blog_admin():
     };
   }
 
-  el("btnSave").onclick = async () => {
+  el("btnSave").onclick = async ()=>{
     setMsg("Saving...");
     const j = await apiPost("/admin/blog/api/save", editorPayload());
-    if (!j || !j.ok) {
+    if(!j || !j.ok){
       setMsg("Save failed: " + (j && j.error ? j.error : "unknown error"));
       return;
     }
-    setMsg((j.msg || "Saved.") + (j.slug ? (" • /blog/" + j.slug) : ""));
+    setMsg((j.msg || "Saved.") + (j.slug ? (" Ã¢â‚¬Â¢ /blog/" + j.slug) : ""));
     location.reload();
   };
 
-  el("btnDelete").onclick = async () => {
-    if (!state.id) { 
-      setMsg("Nothing to delete."); 
-      return; 
-    }
-    if (!confirm("Delete this post?")) return;
-
+  el("btnDelete").onclick = async ()=>{
+    if(!state.id){ setMsg("Nothing to delete."); return; }
+    if(!confirm("Delete this post?")) return;
     setMsg("Deleting...");
     const j = await apiPost("/admin/blog/api/delete", { id: state.id });
-    if (!j || !j.ok) {
+    if(!j || !j.ok){
       setMsg("Delete failed: " + (j && j.error ? j.error : "unknown error"));
       return;
     }
@@ -2843,7 +2841,6 @@ def blog_admin():
 
   renderList();
   clearEditor();
-
 </script>
 </body>
 </html>
