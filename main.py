@@ -911,8 +911,6 @@ class ColorSync:
 
 colorsync = ColorSync()
 
-
-
 def _gf256_mul(a: int, b: int) -> int:
     p = 0
     for _ in range(8):
@@ -1095,6 +1093,7 @@ class SealedStore:
         except Exception as e:
             logger.error(f"Sealed load failed: {e}")
             return False
+            
 def _km_oqs_kem_name(self) -> Optional[str]:
     if oqs is None:
         return None
@@ -1250,7 +1249,7 @@ def _oqs_sig_name() -> Optional[str]:
 
 
 def _km_load_or_create_signing(self: "KeyManager") -> None:
-    # Prefer sealed-store key material if present (prevents key rotation across restarts)
+    
     cache = getattr(self, "_sealed_cache", None)
 
     alg = os.getenv(ENV_SIG_ALG) or None
@@ -1259,7 +1258,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
 
     have_priv = bool(enc) or bool(cache is not None and cache.get("sig_priv_raw") is not None)
 
-    # If ENV is missing, try sealed cache first (Ed25519 can derive public key from raw private key)
+    
     if not (alg and pub and have_priv):
         if cache is not None and cache.get("sig_priv_raw") is not None:
             alg_cache = (cache.get("sig_alg") or alg or "Ed25519")
@@ -1282,7 +1281,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
                 enc = enc or b""
                 have_priv = True
 
-    # If still missing, fall back to generating new keys (may invalidate old signatures)
+    
     if not (alg and pub and have_priv):
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
@@ -1368,8 +1367,8 @@ _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
 _KM._decrypt_x25519_priv        = _km_decrypt_x25519_priv
 _KM._decrypt_pq_priv            = _km_decrypt_pq_priv
-_KM._load_or_create_signing     = _km_load_or_create_signing   # <-- ENV version
-_KM._decrypt_sig_priv           = _km_decrypt_sig_priv         # <-- ENV version
+_KM._load_or_create_signing     = _km_load_or_create_signing
+_KM._decrypt_sig_priv           = _km_decrypt_sig_priv 
 _KM.sign_blob                   = _km_sign
 _KM.verify_blob                 = _km_verify
 
@@ -5618,7 +5617,7 @@ def settings():
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
-        # Re-read env in case it changed between requests (no persistence done here)
+        
         env_val, registration_enabled = _read_registration_from_env()
 
    
