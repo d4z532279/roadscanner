@@ -464,30 +464,20 @@ def get_very_complex_random_interval():
     jitter = int((c * r * 13 + cw * 7 + rng) % 311)
     return base + jitter
 
-# --- Session key rotation (stateless; secrets remain env-only) ---
-# All session signing keys are derived from the base SECRET_KEY (env),
-# so multi-worker deployments stay in sync and CSRF/session failures from
-# per-process random rotation are avoided.
-#
-# Rotation is enabled by default; set QRS_ROTATE_SESSION_KEY=0 to disable.
+
 SESSION_KEY_ROTATION_ENABLED = str(os.getenv("QRS_ROTATE_SESSION_KEY", "1")).lower() not in ("0", "false", "no", "off")
 SESSION_KEY_ROTATION_PERIOD_SECONDS = int(os.getenv("QRS_SESSION_KEY_ROTATION_PERIOD_SECONDS", "1800"))  # 30 minutes
 SESSION_KEY_ROTATION_LOOKBACK = int(os.getenv("QRS_SESSION_KEY_ROTATION_LOOKBACK", "8"))  # current + previous keys
 
 
-# Track (per process) when we last observed a session key window change so we can log each rotation once.
+
 _LAST_SESSION_KEY_WINDOW: int | None = None
 _SESSION_KEY_ROTATION_LOG_LOCK = threading.Lock()
 
 def _log_session_key_rotation(window: int, current_key: bytes) -> None:
-    """Log once per derived-key window change (per process).
-
-    Note: In the stateless/env-derived design there is no background job that 'rotates' a key;
-    the effective signing key changes when the time window changes. This helper emits a log
-    entry the first time the process observes a new window.
-    """
+    
     global _LAST_SESSION_KEY_WINDOW
-    # Avoid locking if we already know we won't log.
+    
     if not SESSION_KEY_ROTATION_ENABLED:
         return
     with _SESSION_KEY_ROTATION_LOG_LOCK:
@@ -501,7 +491,7 @@ def _log_session_key_rotation(window: int, current_key: bytes) -> None:
     except Exception:
         start_utc = "<unknown>"
 
-    # Do NOT log secrets; the fingerprint is derived from the derived key only.
+    
     fp = hashlib.sha256(current_key).hexdigest()[:12]
     logger.info(
         "Session key rotation: window=%s start_utc=%s period_s=%s lookback=%s fp=%s",
@@ -513,10 +503,7 @@ def _log_session_key_rotation(window: int, current_key: bytes) -> None:
     )
 
 def _require_secret_bytes(value, *, name: str = "SECRET_KEY", env_hint: str = "INVITE_CODE_SECRET_KEY") -> bytes:
-    """Coerce a secret into bytes and ensure it is non-empty.
-
-    We intentionally do NOT generate or persist secrets here (env-only requirement).
-    """
+   
     if value is None:
         raise RuntimeError(f"{name} is not set. Provide a strong secret via the {env_hint} environment variable.")
     if isinstance(value, bytearray):
@@ -4027,9 +4014,9 @@ Answer: City, State, United States"""
             counts = Counter(candidates)
             winner, votes = counts.most_common(1)[0]
             if votes >= 2:
-                logger.info(f"LLM CONSENSUS ({votes}/3): {winner}")
+                logger.info(f"LLM CONSENSUS ({votes}/3): ")
                 return winner
-            logger.info(f"LLM SINGLE: {winner}")
+            logger.info(f"LLM SINGLE: ")
             return winner
 
     except Exception as e:
