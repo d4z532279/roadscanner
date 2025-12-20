@@ -1,3 +1,9 @@
+
+
+
+
+
+
 from __future__ import annotations 
 import logging
 import httpx
@@ -169,6 +175,8 @@ if not SECRET_KEY:
 
 if isinstance(SECRET_KEY, str):
     SECRET_KEY = SECRET_KEY.encode("utf-8")
+app.secret_key = SECRET_KEY  # ensure CSRF/session derivations have access before app.config.update
+app.config["SECRET_KEY"] = SECRET_KEY
 
 _entropy_state = {
     "wheel":
@@ -471,11 +479,28 @@ SESSION_KEY_ROTATION_ENABLED = str(os.getenv("QRS_ROTATE_SESSION_KEY", "1")).low
 SESSION_KEY_ROTATION_PERIOD_SECONDS = int(os.getenv("QRS_SESSION_KEY_ROTATION_PERIOD_SECONDS", "1800"))  # 30 minutes
 SESSION_KEY_ROTATION_LOOKBACK = int(os.getenv("QRS_SESSION_KEY_ROTATION_LOOKBACK", "8"))  # current + previous keys
 
-def _hmac_derive(base: bytes, label: bytes, window: int | None = None, out_len: int = 32) -> bytes:
-    if isinstance(base, str):
-        base = base.encode("utf-8")
+def _require_secret_bytes(value, *, name: str = "SECRET_KEY", env_hint: str = "INVITE_CODE_SECRET_KEY") -> bytes:
+    """Coerce a secret into bytes and ensure it is non-empty.
+
+    We intentionally do NOT generate or persist secrets here (env-only requirement).
+    """
+    if value is None:
+        raise RuntimeError(f"{name} is not set. Provide a strong secret via the {env_hint} environment variable.")
+    if isinstance(value, bytearray):
+        value = bytes(value)
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    if not isinstance(value, (bytes,)):
+        raise TypeError(f"{name}: expected bytes/bytearray/str, got {type(value).__name__}")
+    if len(value) == 0:
+        raise RuntimeError(f"{name} is empty. Provide a strong secret via the {env_hint} environment variable.")
+    return value
+
+
+def _hmac_derive(base, label: bytes, window: int | None = None, out_len: int = 32) -> bytes:
+    base_b = _require_secret_bytes(base, name="HMAC base secret")
     msg = label if window is None else (label + b":" + str(window).encode("ascii"))
-    digest = hmac.new(base, msg, hashlib.sha256).digest()
+    digest = hmac.new(base_b, msg, hashlib.sha256).digest()
     # Expand deterministically if caller wants >32 bytes
     if out_len <= len(digest):
         return digest[:out_len]
@@ -483,31 +508,29 @@ def _hmac_derive(base: bytes, label: bytes, window: int | None = None, out_len: 
     ctr = 0
     while len(out) < out_len:
         ctr += 1
-        out.extend(hmac.new(base, msg + b"#" + str(ctr).encode("ascii"), hashlib.sha256).digest())
+        out.extend(hmac.new(base_b, msg + b"#" + str(ctr).encode("ascii"), hashlib.sha256).digest())
     return bytes(out[:out_len])
+
 
 def get_session_signing_keys(app) -> list[bytes]:
     base = getattr(app, "secret_key", None) or app.config.get("SECRET_KEY")
-    if not base:
-        return []
-    if isinstance(base, str):
-        base = base.encode("utf-8")
+    base_b = _require_secret_bytes(base, name="SECRET_KEY", env_hint="INVITE_CODE_SECRET_KEY")
 
     if not SESSION_KEY_ROTATION_ENABLED or SESSION_KEY_ROTATION_PERIOD_SECONDS <= 0:
-        return [base]
+        return [base_b]
 
     w = int(time.time() // SESSION_KEY_ROTATION_PERIOD_SECONDS)
     n = max(1, SESSION_KEY_ROTATION_LOOKBACK)
     keys: list[bytes] = []
     for i in range(n):
-        keys.append(_hmac_derive(base, b"flask-session-signing-v1", window=(w - i), out_len=32))
+        keys.append(_hmac_derive(base_b, b"flask-session-signing-v1", window=(w - i), out_len=32))
     return keys
+
 
 def get_csrf_signing_key(app) -> bytes:
     base = getattr(app, "secret_key", None) or app.config.get("SECRET_KEY")
-    if isinstance(base, str):
-        base = base.encode("utf-8")
-    return _hmac_derive(base, b"flask-wtf-csrf-v1", window=None, out_len=32)
+    base_b = _require_secret_bytes(base, name="SECRET_KEY", env_hint="INVITE_CODE_SECRET_KEY")
+    return _hmac_derive(base_b, b"flask-wtf-csrf-v1", window=None, out_len=32)
 
 class MultiKeySessionInterface(SecureCookieSessionInterface):
     serializer = TaggedJSONSerializer()
@@ -891,7 +914,10 @@ class ColorSync:
             h /= 6
         return int(h * 360), int(s * 100), int(l * 100)
 
+
 colorsync = ColorSync()
+
+
 
 def _gf256_mul(a: int, b: int) -> int:
     p = 0
@@ -904,6 +930,7 @@ def _gf256_mul(a: int, b: int) -> int:
             a ^= 0x1B
         b >>= 1
     return p
+
 
 def _gf256_pow(a: int, e: int) -> int:
     x = 1
@@ -919,6 +946,7 @@ def _gf256_inv(a: int) -> int:
     if a == 0:
         raise ZeroDivisionError
     return _gf256_pow(a, 254)
+
 
 def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
     if len(shares) < t:
@@ -944,10 +972,13 @@ def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
 
     return bytes(out)
 
+
 SEALED_DIR   = Path("./sealed_store")
 SEALED_FILE  = SEALED_DIR / "sealed.json.enc"
 SEALED_VER   = "SS1"
 SHARDS_ENV   = "QRS_SHARDS_JSON"
+
+
 
 @dataclass(frozen=True, slots=True)   
 class SealedRecord:
@@ -1070,7 +1101,6 @@ class SealedStore:
         except Exception as e:
             logger.error(f"Sealed load failed: {e}")
             return False
-            
 def _km_oqs_kem_name(self) -> Optional[str]:
     if oqs is None:
         return None
@@ -1089,6 +1119,7 @@ def _try(f: Callable[[], Any]) -> bool:
         return True
     except Exception:
         return False
+
 
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
@@ -1115,7 +1146,10 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     else:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
+    
     self._x25519_priv_enc = x_privenc or b""
+
+    
     self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
     if not self._pq_alg_name and cache and cache.get("kem_alg"):
         self._pq_alg_name = str(cache["kem_alg"]) or None
@@ -1126,12 +1160,14 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     
     self.pq_pub       = pq_pub_b or None
     self._pq_priv_enc = pq_privenc or None
+
     
     if STRICT_PQ2_ONLY:
         have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
         if not (self._pq_alg_name and self.pq_pub and have_priv):
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
+    
     logger.debug(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
         "yes" if self.x25519_pub else "no",
@@ -1162,6 +1198,7 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
 
+    
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1177,6 +1214,7 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     aes = AESGCM(kek)
     n, ct = pq_enc[:12], pq_enc[12:]
     return aes.decrypt(n, ct, b"pqkem")
+
 
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
    
@@ -1218,7 +1256,7 @@ def _oqs_sig_name() -> Optional[str]:
 
 
 def _km_load_or_create_signing(self: "KeyManager") -> None:
-    
+    # Prefer sealed-store key material if present (prevents key rotation across restarts)
     cache = getattr(self, "_sealed_cache", None)
 
     alg = os.getenv(ENV_SIG_ALG) or None
@@ -1227,7 +1265,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
 
     have_priv = bool(enc) or bool(cache is not None and cache.get("sig_priv_raw") is not None)
 
-    
+    # If ENV is missing, try sealed cache first (Ed25519 can derive public key from raw private key)
     if not (alg and pub and have_priv):
         if cache is not None and cache.get("sig_priv_raw") is not None:
             alg_cache = (cache.get("sig_alg") or alg or "Ed25519")
@@ -1240,7 +1278,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
                         serialization.Encoding.Raw, serialization.PublicFormat.Raw
                     )
                     alg = "Ed25519"
-                    enc = enc or b""  
+                    enc = enc or b""  # private key comes from sealed cache
                     have_priv = True
                 except Exception:
                     pass
@@ -1250,7 +1288,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
                 enc = enc or b""
                 have_priv = True
 
-    
+    # If still missing, fall back to generating new keys (may invalidate old signatures)
     if not (alg and pub and have_priv):
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
@@ -5596,7 +5634,7 @@ def settings():
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
-       
+        # Re-read env in case it changed between requests (no persistence done here)
         env_val, registration_enabled = _read_registration_from_env()
 
    
