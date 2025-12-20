@@ -3695,31 +3695,52 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
+
 @app.route('/home')
 def home():
-    
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
+
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Quantum Road Scanner — Home+</title>
+  <title>QRoadScan.com | Live Traffic Risk Map and Road Hazard Alerts</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="QRoadScan.com turns complex driving signals into a simple live risk colorwheel. Get traffic risk insights, road hazard awareness, and smarter safety decisions with a calming, perceptual visual that updates in real time." />
+  <meta name="keywords" content="QRoadScan, live traffic risk, road hazard alerts, driving safety, risk meter, real-time hazard detection, safe route planning" />
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+  <meta name="theme-color" content="{{ seed_hex }}" />
+  <link rel="canonical" href="{{ request.url }}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="QRoadScan.com" />
+  <meta property="og:title" content="QRoadScan.com | Live Traffic Risk & Road Hazard Intelligence" />
+  <meta property="og:description" content="A live risk colorwheel that helps you read the road at a glance. Real-time safety signals, calm visuals, smarter driving decisions." />
+  <meta property="og:url" content="{{ request.url }}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="QRoadScan.com | Live Traffic Risk & Road Hazard Intelligence" />
+  <meta name="twitter:description" content="See risk instantly with the QRoadScan Colorwheel. Safer decisions, calmer driving." />
 
-  <!-- Fonts & CSS (SRI) -->
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+
+  <script type="application/ld+json">
+  {
+    "@context":"https://schema.org",
+    "@type":"WebSite",
+    "name":"QRoadScan.com",
+    "url":"https://qroadscan.com/",
+    "description":"Live traffic risk and road hazard intelligence visualized as a calming, perceptual colorwheel.",
+    "publisher":{"@type":"Organization","name":"QRoadScan.com","url":"https://qroadscan.com/"}
+  }
+  </script>
 
   <style>
     :root{
-      --bg1:#0b0f17; --bg2:#0d1423; --bg3:#0b1222;
+      --bg1:#0b0f17; --bg2:#0d1423;
       --ink:#eaf5ff; --sub:#b8cfe4; --muted:#95b2cf;
       --glass:#ffffff14; --stroke:#ffffff22;
       --accent: {{ seed_hex }};
@@ -3728,7 +3749,7 @@ def home():
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
     }
     @media (prefers-color-scheme: light){
-      :root{ --bg1:#eef2f7; --bg2:#e5edf9; --bg3:#dde7f6; --ink:#0b1726; --sub:#37536e; --muted:#5a7b97; --glass:#00000010; --stroke:#00000018; }
+      :root{ --bg1:#eef2f7; --bg2:#e5edf9; --ink:#0b1726; --sub:#37536e; --muted:#5a7b97; --glass:#00000010; --stroke:#00000018; }
     }
     html,body{height:100%}
     body{
@@ -3741,8 +3762,6 @@ def home():
       -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
       overflow-x:hidden;
     }
-
-    
     .nebula{
       position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
       background:
@@ -3753,7 +3772,6 @@ def home():
       filter:saturate(120%);
     }
     @keyframes drift{ from{transform:translateY(-0.5%) scale(1.02)} to{transform:translateY(1.2%) scale(1)} }
-
     .navbar{
       background: color-mix(in srgb, #000 62%, transparent);
       backdrop-filter: saturate(140%) blur(10px);
@@ -3761,8 +3779,6 @@ def home():
       border-bottom: 1px solid var(--stroke);
     }
     .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
-
-    
     .hero{
       position:relative; border-radius:calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 96%, transparent);
@@ -3779,39 +3795,29 @@ def home():
       animation: hueFlow 16s ease-in-out infinite alternate;
     }
     @keyframes hueFlow{ from{transform:translateY(-2%) rotate(0.3deg)} to{transform:translateY(1.6%) rotate(-0.3deg)} }
-
     .hero-title{
       font-family:'Orbitron',sans-serif; font-weight:900; line-height:1.035; letter-spacing:.25px;
       background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
     }
     .lead-soft{ color:var(--sub); font-size:1.06rem }
-
     .card-g{
       background: color-mix(in oklab, var(--glass) 94%, transparent);
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
     }
-
-    
     .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
     @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
-
     .wheel-panel{
       position:relative; border-radius: calc(var(--radius) + 10px);
       background: linear-gradient(180deg, #ffffff10, #0000001c);
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
-
-      
       aspect-ratio: 1 / 1;
       min-height: clamp(300px, 42vw, 520px);
     }
     .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
     canvas#wheelCanvas{ width:100%; height:100%; display:block; }
-
-    .wheel-halo{
-      position:absolute; inset:0; display:grid; place-items:center; pointer-events:none;
-    }
+    .wheel-halo{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
     .wheel-halo .halo{
       width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
       filter: blur(calc(30px * var(--halo-blur, .9))) saturate(112%);
@@ -3822,53 +3828,51 @@ def home():
         transparent 66%);
       transition: filter .25s ease, opacity .25s ease;
     }
-
     .hud-center{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center }
     .hud-ring{
       position:absolute; width:58%; aspect-ratio:1; border-radius:50%;
       background: radial-gradient(48% 48% at 50% 50%, #ffffff22, #ffffff05 60%, transparent 62%),
                   conic-gradient(from 140deg, #ffffff13, #ffffff05 65%, #ffffff13);
       filter:saturate(110%);
-      box-shadow: 0 0 calc(22px * var(--glow-mult, .9))
-                  color-mix(in srgb, var(--accent) 35%, transparent);
+      box-shadow: 0 0 calc(22px * var(--glow-mult, .9)) color-mix(in srgb, var(--accent) 35%, transparent);
     }
-    .hud-number{ font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
+    .hud-number{
+      font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
       background: linear-gradient(180deg, #fff, color-mix(in oklab, var(--accent) 44%, #cfeaff));
       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
       text-shadow: 0 2px 24px color-mix(in srgb, var(--accent) 22%, transparent);
     }
-    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 85%, #d8ecff);
-      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
-    .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch }
-
-    .seg{ display:inline-flex; padding:6px; gap:2px; border-radius:999px; background:#ffffff12; border:1px solid var(--stroke) }
-    .seg button{ appearance:none; border:0; padding:.42rem .9rem; border-radius:999px; background:transparent; color:var(--ink); font-weight:700; font-size:.9rem }
-    .seg button[aria-pressed="true"]{ background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 38%, #ffffff26), #ffffff21);
-      box-shadow: inset 0 1px 0 #ffffff66, 0 0 0 2px #00000010; }
-
+    .hud-label{
+      font-weight:800; color: color-mix(in oklab, var(--accent) 85%, #d8ecff);
+      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95;
+    }
+    .hud-note{ color:var(--muted); font-size:.95rem; max-width:28ch }
     .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
-
     .list-clean{margin:0; padding-left:1.2rem}
     .list-clean li{ margin:.42rem 0; color:var(--sub) }
-
     .cta{
-      background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff),
-                                           color-mix(in oklab, var(--accent) 50%, #2bd1ff));
+      background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff), color-mix(in oklab, var(--accent) 50%, #2bd1ff));
       color:#07121f; font-weight:900; border:0; padding:.85rem 1rem; border-radius:12px;
       box-shadow: 0 12px 24px color-mix(in srgb, var(--accent) 30%, transparent);
     }
-
     .meta{ color:var(--sub); font-size:.95rem }
-    .debug{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.85rem; white-space:pre-wrap; max-height:220px; overflow:auto; background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke); }
+    .debug{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size:.85rem; white-space:pre-wrap; max-height:240px; overflow:auto;
+      background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke);
+    }
+    .kicker{ letter-spacing:.14em; text-transform:uppercase; font-weight:900; font-size:.78rem; color: color-mix(in oklab, var(--accent) 80%, #cfeaff); }
   </style>
 </head>
 <body>
   <div class="nebula" aria-hidden="true"></div>
+
   <nav class="navbar navbar-expand-lg navbar-dark">
-    <a class="navbar-brand" href="{{ url_for('home') }}">QRS+</a>
+    <a class="navbar-brand" href="{{ url_for('home') }}">QRoadScan.com</a>
     <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"><span class="navbar-toggler-icon"></span></button>
     <div id="nav" class="collapse navbar-collapse justify-content-end">
       <ul class="navbar-nav">
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('home') }}">Home</a></li>
         {% if 'username' in session %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
           <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
@@ -3881,25 +3885,30 @@ def home():
   </nav>
 
   <main class="container py-5">
-    <!-- HERO -->
     <section class="hero p-4 p-md-5 mb-4">
       <div class="row align-items-center">
         <div class="col-lg-7">
-          <h1 class="hero-title display-5">Risk Colorwheel — Perceptual, Personal, Live</h1>
+          <div class="kicker">Live traffic risk and road hazard awareness.</div>
+          <h1 class="hero-title display-5 mt-2">The Live Safety Colorwheel for Smarter Driving</h1>
           <p class="lead-soft mt-3">
-            Meet your <strong>LLM-guided dial</strong>. The wheel blends many signals into a single reading:
-            a smooth <em>harm ratio</em> from tranquil green → amber drift → alert crimson. In <em>Guess</em> mode,
-            the server (via <code>psutil</code>) samples CPU/RAM & jitter entropy as context; in <em>Route</em> mode,
-            you add coordinates so the model can reason about the trip. The wheel’s <strong>breathing</strong>
-            changes with risk—slower & softer when clear, deeper & brisk when elevated.
+            QRoadScan.com turns noisy signals into a single, readable answer: a smooth risk dial that shifts from calm green to caution amber to alert red.
+            Designed for fast comprehension and low stress.
           </p>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
             <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-            <span class="pill">Your tone: {{ seed_code }}</span>
-            <span class="pill">Strict-JSON LLM</span>
-            <span class="pill">PSUTIL signals</span>
+            <span class="pill">Accent tone: {{ seed_code }}</span>
+            <span class="pill">Live risk preview</span>
+            <span class="pill">Perceptual color ramp</span>
+          </div>
+          <div class="mt-4">
+            <ul class="list-clean">
+              <li><strong>Traffic risk at a glance</strong> with perceptual monitoring.</li>
+              <li><strong>Road hazard awareness</strong> surfaced as simple reasons.</li>
+              <li><strong>Calm-by-design visuals</strong> for quick reading.</li>
+            </ul>
           </div>
         </div>
+
         <div class="col-lg-5 mt-4 mt-lg-0">
           <div class="wheel-panel" id="wheelPanel">
             <div class="wheel-hud">
@@ -3910,50 +3919,41 @@ def home():
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
                   <div class="hud-label" id="hudLabel">INITIALIZING</div>
-                  <div class="hud-note" id="hudNote">Calibrating renderer…</div>
+                  <div class="hud-note" id="hudNote">Calibrating preview</div>
                 </div>
               </div>
             </div>
           </div>
-          <p class="meta mt-2">Tip: if your OS has “Reduce Motion”, animations automatically calm down.</p>
+          <p class="meta mt-2">Tip: if your OS has Reduce Motion enabled, animations automatically soften.</p>
         </div>
       </div>
     </section>
 
-    <!-- CONTROLS + EXPLAINER -->
     <section class="card-g p-4 p-md-5 mb-4">
       <div class="wheel-wrap">
         <div>
-          <h3 class="mb-2">How it decides</h3>
+          <h2 class="mb-2">How QRoadScan reads risk</h2>
           <p class="meta">
-            We call the LLM in two ways and always require strict JSON back. A lightweight worker smooths noise,
-            and the wheel renders a perceptual color ramp with a risk-linked breathing halo and ring glow.
+            This preview shows a live risk reading. The wheel is intentionally simple:
+            one number, one label, and a few reasons.
           </p>
-          <ul class="list-clean">
-            <li><strong>LLM Guess</strong> — server bundles <code>psutil</code> CPU %, RAM %, loadavg, and a tiny entropy sketch; no destination.</li>
-            <li><strong>LLM Route</strong> — includes <code>lat/lon → dest_lat/dest_lon</code> so the LLM can reason about the segment you care about.</li>
-          </ul>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.7rem">
-            <span class="pill">Source</span>
-            <div class="seg" role="tablist" aria-label="Risk source">
-              <button id="btnGuess" role="tab" aria-selected="true" aria-pressed="true" title="No destination; PSUTIL pulse only">LLM Guess</button>
-              <button id="btnRoute" role="tab" aria-selected="false" aria-pressed="false">LLM Route</button>
-              <button id="btnHybrid" role="tab" aria-selected="false" aria-pressed="false" title="Blend Guess+Route if both available">Hybrid</button>
-            </div>
             <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
             <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
             <button id="btnDebug" class="btn btn-sm btn-outline-light" aria-pressed="false">Debug: Off</button>
+            {% if 'username' not in session %}
+              <a class="btn btn-sm btn-light" href="{{ url_for('register') }}">Create Account</a>
+            {% endif %}
           </div>
 
-          <form id="routeForm" class="mt-3" style="display:none">
-            <div class="d-flex flex-wrap" style="gap:.5rem">
-              <input id="lat" class="form-control form-control-sm" style="width:140px" placeholder="lat">
-              <input id="lon" class="form-control form-control-sm" style="width:140px" placeholder="lon">
-              <input id="dlat" class="form-control form-control-sm" style="width:140px" placeholder="dest lat">
-              <input id="dlon" class="form-control form-control-sm" style="width:140px" placeholder="dest lon">
-              <button id="btnRouteFetch" class="btn btn-sm btn-light">Fetch Route Risk</button>
-            </div>
-          </form>
+          <div class="mt-4">
+            <div class="kicker">Core experience</div>
+            <ul class="list-clean mt-2">
+              <li><strong>Live Traffic Risk Colorwheel</strong> that updates without noise.</li>
+              <li><strong>Road Hazard Alerts</strong> explained in plain language.</li>
+              <li><strong>Real-Time Commute Safety</strong> with a calm risk meter.</li>
+            </ul>
+          </div>
         </div>
 
         <div>
@@ -3963,69 +3963,57 @@ def home():
               <span class="pill" id="confidencePill" title="Model confidence">Conf: --%</span>
             </div>
             <ul class="list-clean mt-2" id="reasonsList">
-              <li>Waiting for LLM response…</li>
+              <li>Waiting for risk signal</li>
             </ul>
-            <div id="debugBox" class="debug mt-3" style="display:none">debug…</div>
+            <div id="debugBox" class="debug mt-3" style="display:none">debug</div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- DETAILS -->
     <section class="card-g p-4 p-md-5">
       <div class="row g-4">
         <div class="col-md-4">
-          <h5>Perceptual ramp</h5>
-          <p class="meta">Colors blend in OK-ish space so equal changes feel equal. We also tint ~18% toward your accent for subtle identity.</p>
+          <h3 class="h5">Perceptual color ramp</h3>
+          <p class="meta">Equal changes feel equal, helping you read risk quickly without visual surprises.</p>
         </div>
         <div class="col-md-4">
-          <h5>Breathing & calm tech</h5>
-          <p class="meta">The halo’s breath rate and amplitude follow risk & confidence. Clear → slower and softer; elevated → quicker and fuller.</p>
+          <h3 class="h5">Breathing halo</h3>
+          <p class="meta">Breath rate and glow follow risk and confidence: calm looks calm, alert feels urgent.</p>
         </div>
         <div class="col-md-4">
-          <h5>Privacy by design</h5>
-          <p class="meta">Guess mode never sends a destination. Route mode only sends the numbers you provide. Accent hue is local, not uploaded.</p>
+          <h3 class="h5">Privacy-forward design</h3>
+          <p class="meta">The public preview stays minimal. Deeper routing and history live in the dashboard.</p>
         </div>
       </div>
     </section>
   </main>
 
-  <!-- JS (SRI) -->
-  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
-          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/jquery.min.js') }}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}" integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
 
   <script>
-  
   const $ = (s, el=document)=>el.querySelector(s);
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  // enforce update cadence
-  const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
+  const MIN_UPDATE_MS = 60 * 1000;
   let lastApplyAt = 0;
-
-  // current state
-  const current = { mode:'guess', harm:0, last:null };
+  const current = { harm:0, last:null };
 
   (async function themeSync(){
     try{
       const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
       const j=await r.json();
-      if(j?.hex) document.documentElement.style.setProperty('--accent', j.hex);
+      if(j && j.hex) document.documentElement.style.setProperty('--accent', j.hex);
     }catch(e){}
   })();
 
-  
   (function ensureWheelSize(){
     const panel = document.getElementById('wheelPanel');
     if(!panel) return;
     function fit(){
       const w = panel.clientWidth || panel.offsetWidth || 0;
-      // only force height if the computed height is tiny (aspect-ratio unsupported or broken)
       const ch = parseFloat(getComputedStyle(panel).height) || 0;
       if (ch < 24 && w > 0) panel.style.height = w + 'px';
     }
@@ -4033,30 +4021,9 @@ def home():
     fit();
   })();
 
-  
-  (function parallax(){
-    const panel = $('#wheelPanel'); if(!panel) return;
-    let rx=0, ry=0, vx=0, vy=0;
-    const damp = prefersReduced? .18 : .08;
-    const update=()=>{
-      vx += (rx - vx)*damp; vy += (ry - vy)*damp;
-      panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
-      requestAnimationFrame(update);
-    };
-    update();
-    panel.addEventListener('pointermove', e=>{
-      const r=panel.getBoundingClientRect();
-      const nx = (e.clientX - r.left)/r.width*2 - 1;
-      const ny = (e.clientY - r.top)/r.height*2 - 1;
-      rx = ny * 3.5; ry = -nx * 3.5;
-    });
-    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
-  })();
-
-  
   class BreathEngine {
     constructor(){
-      this.rateHz = 0.10;  // ≈6 bpm baseline
+      this.rateHz = 0.10;
       this.amp    = 0.55;
       this.sweep  = 0.12;
       this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
@@ -4073,15 +4040,11 @@ def home():
       const t = performance.now()/1000;
       const k = prefersReduced ? 0.08 : 0.18;
       this.rateHz += (this._rateTarget - this.rateHz)*k;
-      this.amp    += (this._ampTarget  - this.amp   )*k;
+      this.amp    += (this._ampTarget - this.amp   )*k;
       this.sweep  += (this._sweepTarget- this.sweep )*k;
-
       const base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
       const depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
-      const tremorAmt = prefersReduced ? 0 : (Math.max(0, current.harm - 0.75) * 0.02);
-      const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
-      this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
-
+      this.val = 0.55 + this.amp*(base*depth - 0.5);
       document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28*this.val).toFixed(3));
       document.documentElement.style.setProperty('--halo-blur',  (0.60 + 0.80*this.val).toFixed(3));
       document.documentElement.style.setProperty('--glow-mult',  (0.60 + 0.90*this.val).toFixed(3));
@@ -4091,7 +4054,6 @@ def home():
   const breath = new BreathEngine();
   (function loopBreath(){ breath.tick(); requestAnimationFrame(loopBreath); })();
 
-  
   class RiskWheel {
     constructor(canvas){
       this.c = canvas; this.ctx = canvas.getContext('2d');
@@ -4100,7 +4062,6 @@ def home():
       this.spring = prefersReduced ? 1.0 : 0.12;
       this._resize = this._resize.bind(this);
       new ResizeObserver(this._resize).observe(this.c);
-      // also observe the panel so height/width changes trigger draws
       const panel = document.getElementById('wheelPanel');
       if (panel) new ResizeObserver(this._resize).observe(panel);
       this._resize();
@@ -4108,11 +4069,10 @@ def home():
     }
     setTarget(x){ this.target = clamp01(x); }
     _resize(){
-      // robust sizing even if height reports as 0
       const panel = document.getElementById('wheelPanel');
       const rect = (panel||this.c).getBoundingClientRect();
       let w = rect.width||0, h = rect.height||0;
-      if (h < 2) h = w; // fall back to square if collapsed height
+      if (h < 2) h = w;
       const s = Math.max(1, Math.min(w, h));
       const px = this.pixelRatio;
       this.c.width = s * px; this.c.height = s * px;
@@ -4130,15 +4090,10 @@ def home():
       if (!W || !H) return;
       ctx.clearRect(0,0,W,H);
       const cx=W/2, cy=H/2, R=Math.min(W,H)*0.46, inner=R*0.62;
-
       ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
       ctx.lineWidth = (R-inner);
-
-      
       ctx.strokeStyle='#ffffff16';
       ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
-
-      
       const p=clamp01(this.value), maxAng=p*Math.PI*2, segs=220;
       for(let i=0;i<segs;i++){
         const t0=i/segs; if(t0>=p) break;
@@ -4148,20 +4103,6 @@ def home():
         ctx.arc(0,0,(R+inner)/2, a0, a1);
         ctx.stroke();
       }
-
-      
-      const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
-      const t = performance.now()/1000;
-      const sweepAng = (t * sp) % (Math.PI*2);
-      ctx.save(); ctx.rotate(sweepAng);
-      const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
-      const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
-      grad.addColorStop(0, 'rgba(255,255,255,.95)');
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = grad; ctx.beginPath();
-      ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-
       ctx.restore();
     }
     _mix(h1,h2,k){
@@ -4179,23 +4120,20 @@ def home():
     }
   }
 
-  
   const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
   const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
-  const btnGuess=$('#btnGuess'), btnRoute=$('#btnRoute'), btnHybrid=$('#btnHybrid');
   const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
-  const routeForm=$('#routeForm'), lat=$('#lat'), lon=$('#lon'), dlat=$('#dlat'), dlon=$('#dlon'), btnRouteFetch=$('#btnRouteFetch');
 
   function setHUD(j){
     const pct = Math.round(clamp01(j.harm_ratio||0)*100);
     hudNumber.textContent = pct + "%";
-    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
-    hudNote.textContent  = j.blurb || (pct<40?"Looks good ahead":"Stay adaptive and scan");
+    hudLabel.textContent = (j.label||"").toUpperCase() || "READING";
+    hudNote.textContent  = j.blurb || "Drive calm, stay aware.";
     if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
     confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
     reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context…"]).forEach(x=>{
+    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context..."]).forEach(x=>{
       const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
     });
     if (btnDebug.getAttribute('aria-pressed')==='true'){
@@ -4206,32 +4144,28 @@ def home():
   function applyReading(j){
     if(!j || typeof j.harm_ratio!=='number') return;
     const now = Date.now();
-    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return; // ⏱️ throttle to once per minute
+    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return;
     lastApplyAt = now;
-
     current.last=j; current.harm = clamp01(j.harm_ratio);
     wheel.setTarget(current.harm);
     breath.setFromRisk(current.harm, {confidence: j.confidence});
     setHUD(j);
   }
 
-  
-  function toggleSeg(m){
-    current.mode=m;
-    btnGuess.setAttribute('aria-pressed', m==='guess'); btnGuess.setAttribute('aria-selected', m==='guess');
-    btnRoute.setAttribute('aria-pressed', m==='route'); btnRoute.setAttribute('aria-selected', m==='route');
-    btnHybrid.setAttribute('aria-pressed', m==='hybrid'); btnHybrid.setAttribute('aria-selected', m==='hybrid');
-    routeForm.style.display = (m!=='guess')? '' : 'none';
-    fetchOnce();
+  async function fetchJson(url){
+    try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }
+    catch(e){ return null; }
   }
-  btnGuess.onclick = ()=>toggleSeg('guess');
-  btnRoute.onclick = ()=>toggleSeg('route');
-  btnHybrid.onclick= ()=>toggleSeg('hybrid');
 
-  btnRefresh.onclick = ()=>fetchOnce();
-  btnAuto.onclick = ()=>{
-    if(autoTimer){ stopAuto(); } else { startAuto(); }
-  };
+  // NOTE: this calls your endpoint. If you don't have /api/risk/llm_guess defined,
+  // change it to an endpoint you do have.
+  async function fetchGuessOnce(){
+    const j = await fetchJson('/api/risk/llm_guess');
+    applyReading(j);
+  }
+
+  btnRefresh.onclick = ()=>fetchGuessOnce();
+
   btnDebug.onclick = ()=>{
     const cur=btnDebug.getAttribute('aria-pressed')==='true';
     btnDebug.setAttribute('aria-pressed', !cur);
@@ -4240,54 +4174,22 @@ def home():
     if(!cur && current.last) debugBox.textContent = JSON.stringify(current.last,null,2);
   };
 
-  btnRouteFetch.onclick = async (e)=>{ e.preventDefault(); await fetchRouteOnce(); };
-
   let autoTimer=null;
-  function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
-  function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
-
-  function isRouteFilled(){ return [lat.value,lon.value,dlat.value,dlon.value].every(v=>v && !isNaN(parseFloat(v))); }
-  function currentRoute(){ return { lat:parseFloat(lat.value), lon:parseFloat(lon.value), dest_lat:parseFloat(dlat.value), dest_lon:parseFloat(dlon.value) }; }
-
-  async function fetchOnce(){
-    if(current.mode==='guess') return fetchGuessOnce();
-    if(current.mode==='route') return fetchRouteOnce();
-    // hybrid
-    if(isRouteFilled()){
-      const [g, r] = await Promise.allSettled([fetchJson('/api/risk/llm_guess'), postJson('/api/risk/llm_route', currentRoute())]);
-      const gj = g.status==='fulfilled'? g.value : null;
-      const rj = r.status==='fulfilled'? r.value : null;
-      const mix = blendReadings(gj, rj); applyReading(mix);
-    }else{
-      return fetchGuessOnce();
-    }
+  function startAuto(){
+    stopAuto();
+    btnAuto.setAttribute('aria-pressed','true');
+    btnAuto.textContent="Auto: On";
+    fetchGuessOnce();
+    autoTimer=setInterval(fetchGuessOnce, 60*1000);
   }
-
-  function blendReadings(a, b){
-    if(a && !b) return a; if(b && !a) return b; if(!a && !b) return null;
-    const ca = (a.confidence ?? 0.5), cb=(b.confidence ?? 0.5), tot = (ca+cb)||1;
-    const hr = ((a.harm_ratio??0)*ca + (b.harm_ratio??0)*cb)/tot;
-    const conf = Math.max(ca, cb)*0.9 + 0.05;
-    const reasons = [
-      ...(Array.isArray(a.reasons)? a.reasons.slice(0,3):[]),
-      ...(Array.isArray(b.reasons)? b.reasons.slice(0,3):[])
-    ];
-    const label = hr<.4?'clear':hr<.75?'changing':'elevated';
-    return { ...(b||a), harm_ratio: hr, confidence: conf, reasons, label };
+  function stopAuto(){
+    if(autoTimer) clearInterval(autoTimer);
+    autoTimer=null;
+    btnAuto.setAttribute('aria-pressed','false');
+    btnAuto.textContent="Auto: Off";
   }
+  btnAuto.onclick = ()=>{ if(autoTimer){ stopAuto(); } else { startAuto(); } };
 
-  async function fetchGuessOnce(){ const j = await fetchJson('/api/risk/llm_guess'); applyReading(j); }
-  async function fetchRouteOnce(){
-    if(!isRouteFilled()){ hudNote.textContent="Enter lat/lon + dest lat/lon."; return; }
-    const j = await postJson('/api/risk/llm_route', currentRoute()); applyReading(j);
-  }
-
-  async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }catch(e){ return null; } }
-  async function postJson(url, body){
-    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)}); return await r.json(); }catch(e){ return null; }
-  }
-
-  
   (function trySSE(){
     if(!('EventSource' in window)) return;
     try{
@@ -4297,8 +4199,7 @@ def home():
     }catch(e){}
   })();
 
- 
-  toggleSeg('guess'); startAuto();
+  startAuto();
   </script>
 </body>
 </html>
