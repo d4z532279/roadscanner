@@ -466,13 +466,53 @@ def get_very_complex_random_interval():
     jitter = int((c * r * 13 + cw * 7 + rng) % 311)
     return base + jitter
 
-RECENT_KEYS = deque(maxlen=5) 
+# --- Session key rotation (stateless; secrets remain env-only) ---
+# All session signing keys are derived from the base SECRET_KEY (env),
+# so multi-worker deployments stay in sync and CSRF/session failures from
+# per-process random rotation are avoided.
+#
+# Rotation is enabled by default; set QRS_ROTATE_SESSION_KEY=0 to disable.
+SESSION_KEY_ROTATION_ENABLED = str(os.getenv("QRS_ROTATE_SESSION_KEY", "1")).lower() not in ("0", "false", "no", "off")
+SESSION_KEY_ROTATION_PERIOD_SECONDS = int(os.getenv("QRS_SESSION_KEY_ROTATION_PERIOD_SECONDS", "1800"))  # 30 minutes
+SESSION_KEY_ROTATION_LOOKBACK = int(os.getenv("QRS_SESSION_KEY_ROTATION_LOOKBACK", "8"))  # current + previous keys
 
-def _get_all_secret_keys():
+def _hmac_derive(base: bytes, label: bytes, window: int | None = None, out_len: int = 32) -> bytes:
+    if isinstance(base, str):
+        base = base.encode("utf-8")
+    msg = label if window is None else (label + b":" + str(window).encode("ascii"))
+    digest = hmac.new(base, msg, hashlib.sha256).digest()
+    # Expand deterministically if caller wants >32 bytes
+    if out_len <= len(digest):
+        return digest[:out_len]
+    out = bytearray()
+    ctr = 0
+    while len(out) < out_len:
+        ctr += 1
+        out.extend(hmac.new(base, msg + b"#" + str(ctr).encode("ascii"), hashlib.sha256).digest())
+    return bytes(out[:out_len])
 
-    current = getattr(app, "secret_key", None)
-    others = [k for k in list(RECENT_KEYS) if k is not current and k is not None]
-    return [current] + others if current else others
+def get_session_signing_keys(app) -> list[bytes]:
+    base = getattr(app, "secret_key", None) or app.config.get("SECRET_KEY")
+    if not base:
+        return []
+    if isinstance(base, str):
+        base = base.encode("utf-8")
+
+    if not SESSION_KEY_ROTATION_ENABLED or SESSION_KEY_ROTATION_PERIOD_SECONDS <= 0:
+        return [base]
+
+    w = int(time.time() // SESSION_KEY_ROTATION_PERIOD_SECONDS)
+    n = max(1, SESSION_KEY_ROTATION_LOOKBACK)
+    keys: list[bytes] = []
+    for i in range(n):
+        keys.append(_hmac_derive(base, b"flask-session-signing-v1", window=(w - i), out_len=32))
+    return keys
+
+def get_csrf_signing_key(app) -> bytes:
+    base = getattr(app, "secret_key", None) or app.config.get("SECRET_KEY")
+    if isinstance(base, str):
+        base = base.encode("utf-8")
+    return _hmac_derive(base, b"flask-wtf-csrf-v1", window=None, out_len=32)
 
 class MultiKeySessionInterface(SecureCookieSessionInterface):
     serializer = TaggedJSONSerializer()
@@ -493,7 +533,7 @@ class MultiKeySessionInterface(SecureCookieSessionInterface):
             return self.session_class()
 
         max_age = int(app.permanent_session_lifetime.total_seconds())
-        for key in _get_all_secret_keys():
+        for key in get_session_signing_keys(app):
             ser = self._make_serializer(key)
             if not ser:
                 continue
@@ -505,7 +545,8 @@ class MultiKeySessionInterface(SecureCookieSessionInterface):
         return self.session_class()
 
     def save_session(self, app, session, response):
-        key = getattr(app, "secret_key", None)
+        keys = get_session_signing_keys(app)
+        key = keys[0] if keys else getattr(app, "secret_key", None)
         ser = self._make_serializer(key)
         if not ser:
             return
@@ -545,20 +586,6 @@ class MultiKeySessionInterface(SecureCookieSessionInterface):
 
 app.session_interface = MultiKeySessionInterface()
 
-def rotate_secret_key():
-    lock = threading.Lock()
-    while True:
-        with lock:
-            sk = generate_very_strong_secret_key()
-
-            prev = getattr(app, "secret_key", None)
-            if prev:
-                RECENT_KEYS.appendleft(prev)
-            app.secret_key = sk
-            fp = base64.b16encode(sk[:6]).decode()
-            logger.debug(f"Secret key rotated (fp={fp})")
-        time.sleep(get_very_complex_random_interval())
-
 BASE_DIR = Path(__file__).parent.resolve()
 RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
@@ -571,6 +598,7 @@ app.config.update(SESSION_COOKIE_SECURE=True,
                   SESSION_COOKIE_HTTPONLY=True,
                   SESSION_COOKIE_SAMESITE='Strict',
                   WTF_CSRF_TIME_LIMIT=3600,
+                  WTF_CSRF_SECRET_KEY=get_csrf_signing_key(app),
                   SECRET_KEY=SECRET_KEY)
 
 csrf = CSRFProtect(app)
@@ -3293,12 +3321,10 @@ def start_background_jobs_once() -> None:
         ok_to_start = False 
 
     if ok_to_start:
-        
-        if os.getenv("QRS_ROTATE_SESSION_KEY", "0") == "1":
-            threading.Thread(target=rotate_secret_key, daemon=True).start()
-            logger.debug("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
+        if SESSION_KEY_ROTATION_ENABLED:
+            logger.debug("Session key rotation enabled (stateless, env-derived)")
         else:
-            logger.debug("Session key rotation disabled (QRS_ROTATE_SESSION_KEY!=1).")
+            logger.debug("Session key rotation disabled (set QRS_ROTATE_SESSION_KEY=0).")
 
         threading.Thread(target=delete_expired_data, daemon=True).start()
         app._bg_started = True
@@ -3534,7 +3560,7 @@ ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner 
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUTÂ STRICT JSON ONLY. Keys EXACTLY:
+OUTPUTÃ‚Â STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
@@ -3852,7 +3878,7 @@ class ULTIMATE_FORGE:
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        # person=max 16 bytes, salt=max 16 bytes â€“ both safe now
+        # person=max 16 bytes, salt=max 16 bytes Ã¢â‚¬â€œ both safe now
         h = hashlib.blake2b(
             raw,
             digest_size=64,
@@ -3866,14 +3892,14 @@ class ULTIMATE_FORGE:
         cls,
         lat: float,
         lon: float,
-        role: str = "GEOCODER-Î©",
+        role: str = "GEOCODER-ÃŽÂ©",
         threat_level: int = 9
     ) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
-        # Safe unicode escapes â€“ no mojibake risk
+        # Safe unicode escapes Ã¢â‚¬â€œ no mojibake risk
         quantum_noise = "".join(
-            secrets.choice("\u03A9\u03A8\u0394\u03A3\u03BB\u03BE\u03B2\u03C0*âš›ï¸Ž")
+            secrets.choice("\u03A9\u03A8\u0394\u03A3\u03BB\u03BE\u03B2\u03C0*Ã¢Å¡â€ºÃ¯Â¸Å½")
             for _ in range(16)
         )
 
@@ -3925,7 +3951,7 @@ No explanation.""",
        
         ULTIMATE_FORGE.forge_ultimate_prompt(
             lat, lon,
-            role="GEOCODER-Î©",
+            role="GEOCODER-ÃŽÂ©",
             threat_level=9
         ),
 
