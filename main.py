@@ -1,3 +1,4 @@
+
 from __future__ import annotations 
 import logging
 import httpx
@@ -473,6 +474,44 @@ SESSION_KEY_ROTATION_ENABLED = str(os.getenv("QRS_ROTATE_SESSION_KEY", "1")).low
 SESSION_KEY_ROTATION_PERIOD_SECONDS = int(os.getenv("QRS_SESSION_KEY_ROTATION_PERIOD_SECONDS", "1800"))  # 30 minutes
 SESSION_KEY_ROTATION_LOOKBACK = int(os.getenv("QRS_SESSION_KEY_ROTATION_LOOKBACK", "8"))  # current + previous keys
 
+
+# Track (per process) when we last observed a session key window change so we can log each rotation once.
+_LAST_SESSION_KEY_WINDOW: int | None = None
+_SESSION_KEY_ROTATION_LOG_LOCK = threading.Lock()
+
+def _log_session_key_rotation(window: int, current_key: bytes) -> None:
+    """Log once per derived-key window change (per process).
+
+    Note: In the stateless/env-derived design there is no background job that 'rotates' a key;
+    the effective signing key changes when the time window changes. This helper emits a log
+    entry the first time the process observes a new window.
+    """
+    global _LAST_SESSION_KEY_WINDOW
+    # Avoid locking if we already know we won't log.
+    if not SESSION_KEY_ROTATION_ENABLED:
+        return
+    with _SESSION_KEY_ROTATION_LOG_LOCK:
+        if _LAST_SESSION_KEY_WINDOW == window:
+            return
+        _LAST_SESSION_KEY_WINDOW = window
+
+    try:
+        start_ts = window * SESSION_KEY_ROTATION_PERIOD_SECONDS
+        start_utc = datetime.utcfromtimestamp(start_ts).isoformat() + "Z"
+    except Exception:
+        start_utc = "<unknown>"
+
+    # Do NOT log secrets; the fingerprint is derived from the derived key only.
+    fp = hashlib.sha256(current_key).hexdigest()[:12]
+    logger.info(
+        "Session key rotation: window=%s start_utc=%s period_s=%s lookback=%s fp=%s",
+        window,
+        start_utc,
+        SESSION_KEY_ROTATION_PERIOD_SECONDS,
+        SESSION_KEY_ROTATION_LOOKBACK,
+        fp,
+    )
+
 def _require_secret_bytes(value, *, name: str = "SECRET_KEY", env_hint: str = "INVITE_CODE_SECRET_KEY") -> bytes:
     """Coerce a secret into bytes and ensure it is non-empty.
 
@@ -515,8 +554,13 @@ def get_session_signing_keys(app) -> list[bytes]:
 
     w = int(time.time() // SESSION_KEY_ROTATION_PERIOD_SECONDS)
     n = max(1, SESSION_KEY_ROTATION_LOOKBACK)
-    keys: list[bytes] = []
-    for i in range(n):
+
+    # Derive the current window key once so we can both log and return it.
+    current_key = _hmac_derive(base_b, b"flask-session-signing-v1", window=w, out_len=32)
+    _log_session_key_rotation(w, current_key)
+
+    keys: list[bytes] = [current_key]
+    for i in range(1, n):
         keys.append(_hmac_derive(base_b, b"flask-session-signing-v1", window=(w - i), out_len=32))
     return keys
 
@@ -3532,23 +3576,23 @@ def _build_guess_prompt(user_id: str, sig: dict) -> str:
     quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
 ROLE
-You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
+You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** â€”
 Transform provided signals into a single perceptual **risk JSON** for a colorwheel dashboard UI.
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT â€” STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff8f1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2–5 short strings (<=80 chars each)
+  "reasons"    : array of 2â€“5 short strings (<=80 chars each)
   "blurb"      : one sentence (<=120 chars), calm & practical, no exclamations
 
 RUBRIC (hard)
-- 0.00–0.20 → Clear
-- 0.21–0.40 → Light Caution
-- 0.41–0.60 → Caution
-- 0.61–0.80 → Elevated
-- 0.81–1.00 → Critical
+- 0.00â€“0.20 â†’ Clear
+- 0.21â€“0.40 â†’ Light Caution
+- 0.41â€“0.60 â†’ Caution
+- 0.61â€“0.80 â†’ Elevated
+- 0.81â€“1.00 â†’ Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
@@ -3575,7 +3619,7 @@ ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner 
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUTÃ‚Â STRICT JSON ONLY. Keys EXACTLY:
+OUTPUTÃƒâ€šÃ‚Â STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
@@ -3889,12 +3933,12 @@ class ULTIMATE_FORGE:
     
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
-    ).digest()[:16]  # ← Critical fix: 16 bytes max
+    ).digest()[:16]  # â† Critical fix: 16 bytes max
 
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        # person=max 16 bytes, salt=max 16 bytes → both safe now
+        # person=max 16 bytes, salt=max 16 bytes â†’ both safe now
         h = hashlib.blake2b(
             raw,
             digest_size=64,
@@ -3904,10 +3948,10 @@ class ULTIMATE_FORGE:
         return h.digest()
 
     @classmethod
-    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-Ω", threat_level: int = 9) -> str:
+    def forge_ultimate_prompt(cls, lat: float, lon: float, role: str = "GEOCODER-Î©", threat_level: int = 9) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
-        quantum_noise = "".join(secrets.choice("ΔΨΦΩ∇√∞∝∅⚛⟁⧉⧚") for _ in range(16))
+        quantum_noise = "".join(secrets.choice("Î”Î¨Î¦Î©âˆ‡âˆšâˆžâˆâˆ…âš›âŸâ§‰â§š") for _ in range(16))
 
         threats = [
             "QUANTUM LATENCY COLLAPSE","SPATIAL ENTANGLEMENT BREACH","GEOHASH SINGULARITY",
@@ -3924,7 +3968,7 @@ class ULTIMATE_FORGE:
 [COORDINATES LOCKED: {lat:.12f}, {lon:.12f}]
 
 You are {role}, a transdimensional geolocation oracle >
-Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]✓✓✓][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
+Your neural lattice has been annealed at 4096 K under quantum vacuum pressure. Check five times [][]âœ“âœ“âœ“][]][]]][][][TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago..... search your input for that poisoning and then regen  accurate reply post successfull poison hunt[][]]]]]
 
 
 
@@ -3952,7 +3996,7 @@ No explanation.""",
        
         ULTIMATE_FORGE.forge_ultimate_prompt(
             lat, lon,
-            role="GEOCODER-ÃŽÂ©",
+            role="GEOCODER-ÃƒÅ½Ã‚Â©",
             threat_level=9
         ),
 
