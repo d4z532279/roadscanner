@@ -1,8 +1,3 @@
-
-
-
-
-
 from __future__ import annotations 
 import logging
 import httpx
@@ -896,10 +891,7 @@ class ColorSync:
             h /= 6
         return int(h * 360), int(s * 100), int(l * 100)
 
-
 colorsync = ColorSync()
-
-
 
 def _gf256_mul(a: int, b: int) -> int:
     p = 0
@@ -912,7 +904,6 @@ def _gf256_mul(a: int, b: int) -> int:
             a ^= 0x1B
         b >>= 1
     return p
-
 
 def _gf256_pow(a: int, e: int) -> int:
     x = 1
@@ -928,7 +919,6 @@ def _gf256_inv(a: int) -> int:
     if a == 0:
         raise ZeroDivisionError
     return _gf256_pow(a, 254)
-
 
 def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
     if len(shares) < t:
@@ -954,13 +944,10 @@ def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
 
     return bytes(out)
 
-
 SEALED_DIR   = Path("./sealed_store")
 SEALED_FILE  = SEALED_DIR / "sealed.json.enc"
 SEALED_VER   = "SS1"
 SHARDS_ENV   = "QRS_SHARDS_JSON"
-
-
 
 @dataclass(frozen=True, slots=True)   
 class SealedRecord:
@@ -1083,6 +1070,7 @@ class SealedStore:
         except Exception as e:
             logger.error(f"Sealed load failed: {e}")
             return False
+            
 def _km_oqs_kem_name(self) -> Optional[str]:
     if oqs is None:
         return None
@@ -1101,7 +1089,6 @@ def _try(f: Callable[[], Any]) -> bool:
         return True
     except Exception:
         return False
-
 
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
@@ -1128,10 +1115,7 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     else:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
-    
     self._x25519_priv_enc = x_privenc or b""
-
-    
     self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
     if not self._pq_alg_name and cache and cache.get("kem_alg"):
         self._pq_alg_name = str(cache["kem_alg"]) or None
@@ -1142,14 +1126,12 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     
     self.pq_pub       = pq_pub_b or None
     self._pq_priv_enc = pq_privenc or None
-
     
     if STRICT_PQ2_ONLY:
         have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
         if not (self._pq_alg_name and self.pq_pub and have_priv):
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
-    
     logger.debug(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
         "yes" if self.x25519_pub else "no",
@@ -1180,7 +1162,6 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
 
-    
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1196,7 +1177,6 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     aes = AESGCM(kek)
     n, ct = pq_enc[:12], pq_enc[12:]
     return aes.decrypt(n, ct, b"pqkem")
-
 
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
    
@@ -1238,7 +1218,7 @@ def _oqs_sig_name() -> Optional[str]:
 
 
 def _km_load_or_create_signing(self: "KeyManager") -> None:
-    # Prefer sealed-store key material if present (prevents key rotation across restarts)
+    
     cache = getattr(self, "_sealed_cache", None)
 
     alg = os.getenv(ENV_SIG_ALG) or None
@@ -1247,7 +1227,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
 
     have_priv = bool(enc) or bool(cache is not None and cache.get("sig_priv_raw") is not None)
 
-    # If ENV is missing, try sealed cache first (Ed25519 can derive public key from raw private key)
+    
     if not (alg and pub and have_priv):
         if cache is not None and cache.get("sig_priv_raw") is not None:
             alg_cache = (cache.get("sig_alg") or alg or "Ed25519")
@@ -1260,7 +1240,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
                         serialization.Encoding.Raw, serialization.PublicFormat.Raw
                     )
                     alg = "Ed25519"
-                    enc = enc or b""  # private key comes from sealed cache
+                    enc = enc or b""  
                     have_priv = True
                 except Exception:
                     pass
@@ -1270,7 +1250,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
                 enc = enc or b""
                 have_priv = True
 
-    # If still missing, fall back to generating new keys (may invalidate old signatures)
+    
     if not (alg and pub and have_priv):
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
@@ -5616,7 +5596,7 @@ def settings():
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
-        # Re-read env in case it changed between requests (no persistence done here)
+       
         env_val, registration_enabled = _read_registration_from_env()
 
    
