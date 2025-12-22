@@ -521,7 +521,7 @@ def _hmac_derive(base, label: bytes, window: int | None = None, out_len: int = 3
     base_b = _require_secret_bytes(base, name="HMAC base secret")
     msg = label if window is None else (label + b":" + str(window).encode("ascii"))
     digest = hmac.new(base_b, msg, hashlib.sha256).digest()
-    # Expand deterministically if caller wants >32 bytes
+    
     if out_len <= len(digest):
         return digest[:out_len]
     out = bytearray()
@@ -3072,9 +3072,7 @@ def admin_blog_api_delete():
 
     return jsonify(ok=True)
 
-# ----------------------------
-# Blog backup/export + restore
-# ----------------------------
+
 
 def _blog_backup_now_utc() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -3295,7 +3293,7 @@ def admin_blog_api_export():
         return csrf_fail
 
     payload = _blog_backup_export_dict()
-    # ensure_ascii=True keeps the file ASCII-only, avoiding mojibake in non-UTF8 viewers
+    
     body = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     resp = make_response(body)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
@@ -4221,7 +4219,6 @@ def reverse_geocode(lat: float, lon: float) -> str:
 
 
 class ULTIMATE_FORGE:
-
     _forge_epoch = int(time.time() // 3600)
 
     _forge_salt = hashlib.sha3_512(
@@ -4245,14 +4242,14 @@ class ULTIMATE_FORGE:
         cls,
         lat: float,
         lon: float,
-        role: str = "GEOCODER-Omega",
+        role: str = "GEOCODER-Ω",
         threat_level: int = 9
     ) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
 
         quantum_noise = "".join(
-            secrets.choice("DeltaPsiPhiOmeganablasqrtinfproptod****") for _ in range(16)
+            secrets.choice("ΔΨΦΩ∇√∞∝⊗") for _ in range(16)
         )
 
         threats = [
