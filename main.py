@@ -3597,28 +3597,29 @@ QuantumState: {quantum_state}
 EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
-
 def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
-    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  # ← inject
     return f"""
 ROLE
-You are a Hypertime Nanobot Quantum RoadRisk Scanner 
+You are a Hypertime Nanobot Quantum RoadRisk Scanner
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUTÃƒâ€šÃ‚Â STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2-5 short items (<=80 chars each)
+  "reasons"    : array of 2–5 short items (<=80 chars each)
   "blurb"      : <=120 chars, single sentence; avoid the word "high" unless Critical
 
-RUBRIC - 0.00 to .20 Clear | 0.21 to .40 Light Caution | 0.41 to 0.60 Caution | 0.61 to 0.80 Elevated | 0.81 to 1.00 Critical
+RUBRIC - 0.00 to 0.20 Clear | 0.21 to 0.40 Light Caution | 0.41 to 0.60 Caution | 0.61 to 0.80 Elevated | 0.81 to 1.00 Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
 
-STYLE & SECURITY - Concrete, calm reasoning; no exclamations or policies. - Output strictly the JSON object; never echo inputs.
+STYLE & SECURITY
+- Concrete, calm reasoning; no exclamations or policies.
+- Output strictly the JSON object; never echo inputs.
 
 INPUTS
 Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -3630,7 +3631,6 @@ Route: {json.dumps(route, separators=(',',':'))}
 EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
-
 
 _GROK_CLIENT = None
 _GROK_BASE_URL = "https://api.x.ai/v1"
