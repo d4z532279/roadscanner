@@ -3560,26 +3560,26 @@ def _system_signals(uid: str):
 
 
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
-    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  # ← inject
     return f"""
 ROLE
-You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** â€”
+You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
 Transform provided signals into a single perceptual **risk JSON** for a colorwheel dashboard UI.
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUT â€” STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff8f1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2â€“5 short strings (<=80 chars each)
+  "reasons"    : array of 2–5 short strings (<=80 chars each)
   "blurb"      : one sentence (<=120 chars), calm & practical, no exclamations
 
 RUBRIC (hard)
-- 0.00â€“0.20 â†’ Clear
-- 0.21â€“0.40 â†’ Light Caution
-- 0.41â€“0.60 â†’ Caution
-- 0.61â€“0.80 â†’ Elevated
-- 0.81â€“1.00 â†’ Critical
+- 0.00–0.20 → Clear
+- 0.21–0.40 → Light Caution
+- 0.41–0.60 → Caution
+- 0.61–0.80 → Elevated
+- 0.81–1.00 → Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
@@ -3597,7 +3597,6 @@ QuantumState: {quantum_state}
 EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
-
 
 def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
     quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
