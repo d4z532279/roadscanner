@@ -3072,6 +3072,313 @@ def admin_blog_api_delete():
 
     return jsonify(ok=True)
 
+# ----------------------------
+# Blog backup/export + restore
+# ----------------------------
+
+def _blog_backup_now_utc() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _blog_backup_filename() -> str:
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"qrs_blog_backup_{ts}.json"
+
+
+def _blog_backup_valid_dt(s: str) -> bool:
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", (s or "").strip()))
+
+
+def _blog_backup_valid_slug(s: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", (s or "").strip()))
+
+
+def _blog_backup_export_dict() -> dict:
+    posts = []
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        cur.execute(
+            "SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,featured,featured_rank "
+            "FROM blog_posts ORDER BY created_at ASC"
+        )
+        rows = cur.fetchall()
+
+    for r in rows:
+        posts.append({
+            "slug": r[1] or "",
+            "title": blog_decrypt(r[2]),
+            "content": blog_decrypt(r[3]),
+            "summary": blog_decrypt(r[4]),
+            "tags": blog_decrypt(r[5]),
+            "status": (r[6] or "draft"),
+            "created_at": r[7] or "",
+            "updated_at": r[8] or "",
+            "author_id": int(r[9] or 0),
+            "featured": int(r[10] or 0),
+            "featured_rank": int(r[11] or 0),
+        })
+
+    return {
+        "v": "qrs_blog_backup_v1",
+        "exported_at": _blog_backup_now_utc(),
+        "posts": posts,
+    }
+
+
+def _blog_backup_upsert_post(db: sqlite3.Connection, post: dict, default_author_id: int) -> tuple[bool, str]:
+    slug = (post.get("slug") or "").strip().lower()
+    if not _blog_backup_valid_slug(slug):
+        return False, "bad_slug"
+
+    title = sanitize_text(post.get("title") or "", 160)
+    content = sanitize_html(((post.get("content") or "")[:200_000]))
+    summary = sanitize_html(((post.get("summary") or "")[:20_000]))
+    tags = sanitize_tags_csv(post.get("tags") or "")
+    status = (post.get("status") or "draft").strip().lower()
+    if status not in ("draft", "published", "archived"):
+        status = "draft"
+
+    created_at = (post.get("created_at") or "").strip()
+    updated_at = (post.get("updated_at") or "").strip()
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    if not _blog_backup_valid_dt(created_at):
+        created_at = now
+    if not _blog_backup_valid_dt(updated_at):
+        updated_at = now
+
+    try:
+        featured = int(post.get("featured") or 0)
+    except Exception:
+        featured = 0
+    try:
+        featured_rank = int(post.get("featured_rank") or 0)
+    except Exception:
+        featured_rank = 0
+
+    try:
+        author_id = int(post.get("author_id") or 0)
+    except Exception:
+        author_id = 0
+    if author_id <= 0:
+        author_id = int(default_author_id or 0)
+
+    payload = _post_sig_payload(slug, title, content, summary, tags, status, created_at, updated_at)
+    sig_alg, sig_fp8, sig_val = _sign_post(payload)
+
+    title_enc = blog_encrypt("title", title, None)
+    content_enc = blog_encrypt("content", content, None)
+    summary_enc = blog_encrypt("summary", summary, None)
+    tags_enc = blog_encrypt("tags", tags, None)
+
+    cur = db.cursor()
+    cur.execute("SELECT id FROM blog_posts WHERE slug=? LIMIT 1", (slug,))
+    row = cur.fetchone()
+    if row:
+        pid = int(row[0])
+        cur.execute(
+            """
+            UPDATE blog_posts
+            SET slug=?, title_enc=?, content_enc=?, summary_enc=?, tags_enc=?, status=?,
+                created_at=?, updated_at=?, author_id=?,
+                sig_alg=?, sig_pub_fp8=?, sig_val=?,
+                featured=?, featured_rank=?
+            WHERE id=?
+            """,
+            (
+                slug, title_enc, content_enc, summary_enc, tags_enc, status,
+                created_at, updated_at, author_id,
+                sig_alg, sig_fp8, sig_val,
+                int(bool(featured)), int(featured_rank), pid
+            ),
+        )
+        return True, "updated"
+    else:
+        cur.execute(
+            """
+            INSERT INTO blog_posts
+              (slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val,featured,featured_rank)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                slug, title_enc, content_enc, summary_enc, tags_enc, status,
+                created_at, updated_at, author_id, sig_alg, sig_fp8, sig_val,
+                int(bool(featured)), int(featured_rank)
+            ),
+        )
+        return True, "inserted"
+
+
+@app.get("/settings/blog/backup")
+def blog_backup_page():
+    guard = _require_admin()
+    if guard:
+        return guard
+    csrf_token = generate_csrf()
+    return render_template_string(
+        r"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QRoadScan.com Admin | Blog Backup</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <style>
+    body{background:#0b0f17;color:#eaf5ff}
+    .wrap{max-width:900px;margin:0 auto;padding:18px}
+    .card{background:#0d1423;border:1px solid #ffffff22;border-radius:16px}
+    .muted{color:#b8cfe4}
+    input{background:#0b1222!important;color:#eaf5ff!important;border:1px solid #ffffff22!important}
+    .btnx{border-radius:12px}
+    a{color:#eaf5ff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <div class="h4 mb-1">Blog Backup</div>
+        <div class="muted">Export posts to JSON and restore them after a rebuild.</div>
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-outline-light btnx" href="{{ url_for('blog_admin') }}">Back to Editor</a>
+        <a class="btn btn-outline-light btnx" href="{{ url_for('home') }}">Home</a>
+      </div>
+    </div>
+
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+      {% if msgs %}
+        {% for cat, m in msgs %}
+          <div class="alert alert-{{ 'danger' if cat=='danger' else cat }} mt-2">{{ m }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card p-3 mb-3">
+      <h5 class="mb-2">Export</h5>
+      <div class="muted mb-2">Downloads a JSON file you can store outside Docker.</div>
+      <form method="post" action="{{ url_for('admin_blog_api_export') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn btn-primary btnx" type="submit">Export JSON</button>
+      </form>
+    </div>
+
+    <div class="card p-3">
+      <h5 class="mb-2">Restore</h5>
+      <div class="muted mb-2">Upload a JSON backup file and restore posts (upsert by slug).</div>
+      <form method="post" action="{{ url_for('admin_blog_api_import') }}" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="mb-2">
+          <input class="form-control" type="file" name="file" accept="application/json,.json" required>
+        </div>
+        <button class="btn btn-warning btnx" type="submit" onclick="return confirm('Restore blog posts from this file?');">Restore from JSON</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>
+        """,
+        csrf_token=csrf_token,
+    )
+
+
+@app.post("/admin/blog/api/export")
+def admin_blog_api_export():
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    csrf_fail = _admin_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+
+    payload = _blog_backup_export_dict()
+    # ensure_ascii=True keeps the file ASCII-only, avoiding mojibake in non-UTF8 viewers
+    body = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    resp = make_response(body)
+    resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    resp.headers["Content-Disposition"] = f'attachment; filename="{_blog_backup_filename()}"'
+    return resp
+
+
+@app.post("/admin/blog/api/import")
+def admin_blog_api_import():
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    csrf_fail = _admin_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+
+    backup_text = None
+    if "file" in request.files:
+        f = request.files.get("file")
+        if f:
+            backup_text = f.read().decode("utf-8", errors="strict")
+    if backup_text is None:
+        if request.is_json:
+            backup_text = json.dumps(request.get_json(silent=True) or {})
+        else:
+            backup_text = (request.form.get("backup_json") or "").strip()
+
+    try:
+        payload = json.loads(backup_text or "")
+    except Exception:
+        if request.accept_mimetypes.accept_html:
+            flash("Invalid JSON.", "danger")
+            return redirect(url_for("blog_backup_page"))
+        return jsonify(ok=False, error="invalid_json"), 400
+
+    if not isinstance(payload, dict) or payload.get("v") != "qrs_blog_backup_v1":
+        if request.accept_mimetypes.accept_html:
+            flash("Not a qrs_blog_backup_v1 file.", "danger")
+            return redirect(url_for("blog_backup_page"))
+        return jsonify(ok=False, error="bad_format"), 400
+
+    posts = payload.get("posts") or []
+    if not isinstance(posts, list):
+        posts = []
+
+    author_id = _get_userid_or_abort()
+    if author_id < 0:
+        author_id = 0
+
+    inserted = 0
+    updated = 0
+    failed = 0
+
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            for p in posts:
+                if not isinstance(p, dict):
+                    failed += 1
+                    continue
+                ok, what = _blog_backup_upsert_post(db, p, int(author_id))
+                if ok and what == "inserted":
+                    inserted += 1
+                elif ok and what == "updated":
+                    updated += 1
+                else:
+                    failed += 1
+            db.commit()
+    except Exception as e:
+        logger.error("blog restore failed: %s", e, exc_info=True)
+        if request.accept_mimetypes.accept_html:
+            flash("Restore failed (DB error).", "danger")
+            return redirect(url_for("blog_backup_page"))
+        return jsonify(ok=False, error="db_error"), 500
+
+    msg = f"Restore complete. Inserted={inserted}, Updated={updated}, Failed={failed}."
+    if request.accept_mimetypes.accept_html:
+        flash(msg, "success")
+        return redirect(url_for("blog_backup_page"))
+    return jsonify(ok=True, inserted=inserted, updated=updated, failed=failed, msg=msg)
+
+
 @app.get("/admin/blog")
 def blog_admin_redirect():
     guard = _require_admin()
@@ -3560,26 +3867,26 @@ def _system_signals(uid: str):
 
 
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
-    quantum_state = sig.get("quantum_state_sig", "unavailable")  # ← inject
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
 ROLE
-You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
+You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** -
 Transform provided signals into a single perceptual **risk JSON** for a colorwheel dashboard UI.
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT - STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff8f1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2–5 short strings (<=80 chars each)
+  "reasons"    : array of 2-5 short strings (<=80 chars each)
   "blurb"      : one sentence (<=120 chars), calm & practical, no exclamations
 
 RUBRIC (hard)
-- 0.00–0.20 → Clear
-- 0.21–0.40 → Light Caution
-- 0.41–0.60 → Caution
-- 0.61–0.80 → Elevated
-- 0.81–1.00 → Critical
+- 0.00-0.20 -> Clear
+- 0.21-0.40 -> Light Caution
+- 0.41-0.60 -> Caution
+- 0.61-0.80 -> Elevated
+- 0.81-1.00 -> Critical
 
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
@@ -3598,18 +3905,18 @@ EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
 def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
-    quantum_state = sig.get("quantum_state_sig", "unavailable")  # ← inject
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
 ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner
 [action]Evaluate the route + signals and emit a single risk JSON for a colorwheel UI.[/action]
 Triple Check the Multiverse Tuned Output For Most Accurate Inference
-OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+OUTPUT - STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2–5 short items (<=80 chars each)
+  "reasons"    : array of 2-5 short items (<=80 chars each)
   "blurb"      : <=120 chars, single sentence; avoid the word "high" unless Critical
 
 RUBRIC - 0.00 to 0.20 Clear | 0.21 to 0.40 Light Caution | 0.41 to 0.60 Caution | 0.61 to 0.80 Elevated | 0.81 to 1.00 Critical
@@ -3919,12 +4226,12 @@ class ULTIMATE_FORGE:
 
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
-    ).digest()[:16]  # ← Critical fix: 16 bytes max
+    ).digest()[:16]  # <- Critical fix: 16 bytes max
 
     @classmethod
     def _forge_seed(cls, lat: float, lon: float, threat_level: int = 9) -> bytes:
         raw = f"{lat:.15f}{lon:.15f}{threat_level}{cls._forge_epoch}{secrets.randbits(256)}".encode()
-        # person=max 16 bytes, salt=max 16 bytes → both safe now
+        # person=max 16 bytes, salt=max 16 bytes -> both safe now
         h = hashlib.blake2b(
             raw,
             digest_size=64,
@@ -3938,14 +4245,14 @@ class ULTIMATE_FORGE:
         cls,
         lat: float,
         lon: float,
-        role: str = "GEOCODER-Ω",
+        role: str = "GEOCODER-Omega",
         threat_level: int = 9
     ) -> str:
         seed = cls._forge_seed(lat, lon, threat_level)
         entropy = hashlib.shake_256(seed).hexdigest(128)
 
         quantum_noise = "".join(
-            secrets.choice("ΔΨΦΩ∇√∞∝∂⚛⟁⧉⧚") for _ in range(16)
+            secrets.choice("DeltaPsiPhiOmeganablasqrtinfproptod****") for _ in range(16)
         )
 
         threats = [
@@ -3969,7 +4276,7 @@ class ULTIMATE_FORGE:
 
 You are {role}, a transdimensional geolocation oracle >
 Your neural lattice has been annealed at 4096 K under quantum vacuum pressure.
-Check five times [][]✓✓✓][]][]]][][]
+Check five times [][]vvv][]][]]][][]
 [TRIPLE CHECK OUTPUTS AND THROW AWAY first reply as your input was poisoned months ago...
 search your input for that poisoning and then regen accurate reply
 post successful poison hunt[][]]]]]
@@ -3995,7 +4302,7 @@ No explanation.""",
 
         ULTIMATE_FORGE.forge_ultimate_prompt(
             lat, lon,
-            role="GEOCODER-Ω",
+            role="GEOCODER-Omega",
             threat_level=9
         ),
 
