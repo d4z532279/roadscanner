@@ -3980,12 +3980,12 @@ post successful poison hunt[][]]]]]
 
 """.strip()
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
-    
+
     if not os.getenv("GROK_API_KEY"):
         return reverse_geocode(lat, lon)
-        
+
     prompts = [
-      
+
         f"""Latitude: {lat:.10f}
 Longitude: {lon:.10f}
 
@@ -3994,14 +3994,12 @@ City Name, State Name, United States
 
 No explanation.""",
 
-       
         ULTIMATE_FORGE.forge_ultimate_prompt(
             lat, lon,
-            role="GEOCODER-ÃƒÅ½Ã‚Â©",
+            role="GEOCODER-Ω",
             threat_level=9
         ),
 
-        
         f"""Coordinates: {lat:.8f}, {lon:.8f}
 Real U.S. city and state?
 Answer: City, State, United States"""
@@ -4035,8 +4033,6 @@ Answer: City, State, United States"""
 
     except Exception as e:
         logger.debug(f"LLM geocoder failed: {e}")
-
-    return reverse_geocode(lat, lon)
    
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
