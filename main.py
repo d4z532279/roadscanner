@@ -4719,6 +4719,7 @@ def build_road_scanner_prompt(data: dict, include_system_entropy: bool = True) -
         f"Traffic: {data.get('traffic','unknown')}\n"
         f"Obstacles: {data.get('obstacles','none')}\n"
         f"Sensor notes: {data.get('sensor_notes','none')}\n"
+        f"{metrics_line}\n"
         f"Quantum State: {entropy_text}\n"
         "[/tuning]\n\n"
         "Follow these strict rules when forming your decision:\n"
