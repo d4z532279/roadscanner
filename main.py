@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations 
 import logging
 import httpx
@@ -35,7 +36,12 @@ from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, c
 import uuid
 import asyncio
 import sys
-import pennylane as qml
+try:
+    import pennylane as qml
+    from pennylane import numpy as pnp
+except Exception:
+    qml = None
+    pnp = None
 import numpy as np
 from pathlib import Path
 import os
@@ -1769,7 +1775,6 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
     except Exception as e:
         logger.error(f"PQ2 encrypt failed: {e}", exc_info=True)
         return None
-
 
 
 
@@ -4314,22 +4319,463 @@ def build_local_risk_prompt(scene: dict) -> str:
         "- Output one word only.\\n"
     )
 
+# -----------------------------
+# Local Llama "PQE" risk helpers
+# (System metrics + PennyLane entropic score + PUNKD chunked gen)
+# -----------------------------
+
+def _read_proc_stat() -> Optional[Tuple[int, int]]:
+    try:
+        with open("/proc/stat", "r") as f:
+            line = f.readline()
+        if not line.startswith("cpu "):
+            return None
+        parts = line.split()
+        vals = [int(x) for x in parts[1:]]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        total = sum(vals)
+        return total, idle
+    except Exception:
+        return None
+
+
+def _cpu_percent_from_proc(sample_interval: float = 0.12) -> Optional[float]:
+    t1 = _read_proc_stat()
+    if not t1:
+        return None
+    time.sleep(sample_interval)
+    t2 = _read_proc_stat()
+    if not t2:
+        return None
+    total1, idle1 = t1
+    total2, idle2 = t2
+    total_delta = total2 - total1
+    idle_delta = idle2 - idle1
+    if total_delta <= 0:
+        return None
+    usage = (total_delta - idle_delta) / float(total_delta)
+    return max(0.0, min(1.0, usage))
+
+
+def _mem_from_proc() -> Optional[float]:
+    try:
+        info: Dict[str, int] = {}
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                parts = line.split(":")
+                if len(parts) < 2:
+                    continue
+                k = parts[0].strip()
+                v = parts[1].strip().split()[0]
+                info[k] = int(v)
+        total = info.get("MemTotal")
+        available = info.get("MemAvailable", None)
+        if total is None:
+            return None
+        if available is None:
+            available = info.get("MemFree", 0) + info.get("Buffers", 0) + info.get("Cached", 0)
+        used_fraction = max(0.0, min(1.0, (total - available) / float(total)))
+        return used_fraction
+    except Exception:
+        return None
+
+
+def _load1_from_proc(cpu_count_fallback: int = 1) -> Optional[float]:
+    try:
+        with open("/proc/loadavg", "r") as f:
+            first = f.readline().split()[0]
+        load1 = float(first)
+        try:
+            cpu_cnt = os.cpu_count() or cpu_count_fallback
+        except Exception:
+            cpu_cnt = cpu_count_fallback
+        val = load1 / max(1.0, float(cpu_cnt))
+        return max(0.0, min(1.0, val))
+    except Exception:
+        return None
+
+
+def _proc_count_from_proc() -> Optional[float]:
+    try:
+        pids = [name for name in os.listdir("/proc") if name.isdigit()]
+        return max(0.0, min(1.0, len(pids) / 1000.0))
+    except Exception:
+        return None
+
+
+def _read_temperature() -> Optional[float]:
+    temps: List[float] = []
+    try:
+        base = "/sys/class/thermal"
+        if os.path.isdir(base):
+            for entry in os.listdir(base):
+                if not entry.startswith("thermal_zone"):
+                    continue
+                path = os.path.join(base, entry, "temp")
+                try:
+                    with open(path, "r") as f:
+                        raw = f.read().strip()
+                    if not raw:
+                        continue
+                    val = int(raw)
+                    c = val / 1000.0 if val > 1000 else float(val)
+                    temps.append(c)
+                except Exception:
+                    continue
+
+        if not temps:
+            possible = [
+                "/sys/devices/virtual/thermal/thermal_zone0/temp",
+                "/sys/class/hwmon/hwmon0/temp1_input",
+            ]
+            for p in possible:
+                try:
+                    with open(p, "r") as f:
+                        raw = f.read().strip()
+                    if not raw:
+                        continue
+                    val = int(raw)
+                    c = val / 1000.0 if val > 1000 else float(val)
+                    temps.append(c)
+                except Exception:
+                    continue
+
+        if not temps:
+            return None
+
+        avg_c = sum(temps) / float(len(temps))
+        norm = (avg_c - 20.0) / (90.0 - 20.0)
+        return max(0.0, min(1.0, norm))
+    except Exception:
+        return None
+
+
+def collect_system_metrics() -> Dict[str, float]:
+    cpu = mem = load1 = temp = proc = None
+
+    if psutil is not None:
+        try:
+            cpu = psutil.cpu_percent(interval=0.1) / 100.0
+            mem = psutil.virtual_memory().percent / 100.0
+            try:
+                load_raw = os.getloadavg()[0]
+                cpu_cnt = psutil.cpu_count(logical=True) or 1
+                load1 = max(0.0, min(1.0, load_raw / max(1.0, float(cpu_cnt))))
+            except Exception:
+                load1 = None
+            try:
+                temps_map = psutil.sensors_temperatures()
+                if temps_map:
+                    first = next(iter(temps_map.values()))[0].current
+                    temp = max(0.0, min(1.0, (first - 20.0) / 70.0))
+                else:
+                    temp = None
+            except Exception:
+                temp = None
+            try:
+                proc = min(len(psutil.pids()) / 1000.0, 1.0)
+            except Exception:
+                proc = None
+        except Exception:
+            cpu = mem = load1 = temp = proc = None
+
+    if cpu is None:
+        cpu = _cpu_percent_from_proc()
+    if mem is None:
+        mem = _mem_from_proc()
+    if load1 is None:
+        load1 = _load1_from_proc()
+    if proc is None:
+        proc = _proc_count_from_proc()
+    if temp is None:
+        temp = _read_temperature()
+
+    core_ok = all(x is not None for x in (cpu, mem, load1, proc))
+    if not core_ok:
+        missing = [name for name, val in (("cpu", cpu), ("mem", mem), ("load1", load1), ("proc", proc)) if val is None]
+        logger.warning("Unable to obtain core system metrics: missing=%s", missing)
+        # Fall back to safe defaults instead of exiting inside a web server.
+        cpu = cpu if cpu is not None else 0.2
+        mem = mem if mem is not None else 0.2
+        load1 = load1 if load1 is not None else 0.2
+        proc = proc if proc is not None else 0.1
+
+    cpu = float(max(0.0, min(1.0, cpu if cpu is not None else 0.2)))
+    mem = float(max(0.0, min(1.0, mem if mem is not None else 0.2)))
+    load1 = float(max(0.0, min(1.0, load1 if load1 is not None else 0.2)))
+    proc = float(max(0.0, min(1.0, proc if proc is not None else 0.1)))
+    temp = float(max(0.0, min(1.0, temp if temp is not None else 0.0)))
+
+    return {"cpu": cpu, "mem": mem, "load1": load1, "temp": temp, "proc": proc}
+
+
+def metrics_to_rgb(metrics: dict) -> Tuple[float, float, float]:
+    cpu = metrics.get("cpu", 0.1)
+    mem = metrics.get("mem", 0.1)
+    temp = metrics.get("temp", 0.1)
+    load1 = metrics.get("load1", 0.0)
+    proc = metrics.get("proc", 0.0)
+
+    r = cpu * (1.0 + load1)
+    g = mem * (1.0 + proc)
+    b = temp * (0.5 + cpu * 0.5)
+
+    maxi = max(r, g, b, 1.0)
+    r, g, b = r / maxi, g / maxi, b / maxi
+    return (
+        float(max(0.0, min(1.0, r))),
+        float(max(0.0, min(1.0, g))),
+        float(max(0.0, min(1.0, b))),
+    )
+
+
+def pennylane_entropic_score(rgb: Tuple[float, float, float], shots: int = 256) -> float:
+    if qml is None or pnp is None:
+        r, g, b = rgb
+        ri = max(0, min(255, int(r * 255)))
+        gi = max(0, min(255, int(g * 255)))
+        bi = max(0, min(255, int(b * 255)))
+
+        seed = (ri << 16) | (gi << 8) | bi
+        random.seed(seed)
+
+        base = (0.3 * r + 0.4 * g + 0.3 * b)
+        noise = (random.random() - 0.5) * 0.08
+        return max(0.0, min(1.0, base + noise))
+
+    dev = qml.device("default.qubit", wires=2, shots=shots)
+
+    @qml.qnode(dev)
+    def circuit(a, b, c):
+        # 2-qubit "2nd gate" setup
+        qml.RX(a * math.pi, wires=0)
+        qml.RY(b * math.pi, wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.RZ(c * math.pi, wires=1)
+        qml.RX((a + b) * math.pi / 2, wires=0)
+        qml.RY((b + c) * math.pi / 2, wires=1)
+        return qml.expval(qml.PauliZ(0)), qml.expval(qml.PauliZ(1))
+
+    a, b, c = float(rgb[0]), float(rgb[1]), float(rgb[2])
+
+    try:
+        ev0, ev1 = circuit(a, b, c)
+        combined = ((ev0 + 1.0) / 2.0 * 0.6 + (ev1 + 1.0) / 2.0 * 0.4)
+        score = 1.0 / (1.0 + math.exp(-6.0 * (combined - 0.5)))
+        return float(max(0.0, min(1.0, score)))
+    except Exception:
+        return float(0.5 * (a + b + c) / 3.0)
+
+
+def entropic_to_modifier(score: float) -> float:
+    return (score - 0.5) * 0.4
+
+
+def entropic_summary_text(score: float) -> str:
+    if score >= 0.75:
+        level = "high"
+    elif score >= 0.45:
+        level = "medium"
+    else:
+        level = "low"
+    return f"entropic_score={score:.3f} (level={level})"
+
+
+def _simple_tokenize(text: str) -> List[str]:
+    return [t for t in re.findall(r"[A-Za-z0-9_\-]+", (text or "").lower())]
+
+
+def punkd_analyze(prompt_text: str, top_n: int = 12) -> Dict[str, float]:
+    toks = _simple_tokenize(prompt_text)
+    freq: Dict[str, int] = {}
+    for t in toks:
+        freq[t] = freq.get(t, 0) + 1
+
+    hazard_boost = {
+        "ice": 2.0,
+        "wet": 1.8,
+        "snow": 2.0,
+        "flood": 2.0,
+        "construction": 1.8,
+        "pedestrian": 1.8,
+        "debris": 1.8,
+        "animal": 1.5,
+        "stall": 1.4,
+        "fog": 1.6,
+    }
+    scored: Dict[str, float] = {}
+    for t, c in freq.items():
+        boost = hazard_boost.get(t, 1.0)
+        scored[t] = float(c) * float(boost)
+
+    items = sorted(scored.items(), key=lambda x: -x[1])[:top_n]
+    if not items:
+        return {}
+    maxv = items[0][1]
+    if maxv <= 0:
+        return {}
+    return {k: float(v / maxv) for k, v in items}
+
+
+def punkd_apply(prompt_text: str, token_weights: Dict[str, float], profile: str = "balanced") -> Tuple[str, float]:
+    if not token_weights:
+        return prompt_text, 1.0
+
+    mean_weight = sum(token_weights.values()) / float(len(token_weights))
+    profile_map = {"conservative": 0.6, "balanced": 1.0, "aggressive": 1.4}
+    base = profile_map.get(profile, 1.0)
+
+    multiplier = 1.0 + (mean_weight - 0.5) * 0.8 * (base if base > 1.0 else 1.0)
+    multiplier = max(0.6, min(1.8, multiplier))
+
+    sorted_tokens = sorted(token_weights.items(), key=lambda x: -x[1])[:6]
+    markers = " ".join([f"<ATTN:{t}:{round(w,2)}>" for t, w in sorted_tokens])
+    patched = (prompt_text or "") + "\n\n[PUNKD_MARKERS] " + markers
+    return patched, multiplier
+
+
+def chunked_generate(
+    llm: "Llama",
+    prompt: str,
+    max_total_tokens: int = 256,
+    chunk_tokens: int = 64,
+    base_temperature: float = 0.2,
+    punkd_profile: str = "balanced",
+) -> str:
+    assembled = ""
+    cur_prompt = prompt
+    token_weights = punkd_analyze(prompt, top_n=16)
+    iterations = max(1, (max_total_tokens + chunk_tokens - 1) // chunk_tokens)
+    prev_tail = ""
+
+    for _ in range(iterations):
+        patched_prompt, mult = punkd_apply(cur_prompt, token_weights, profile=punkd_profile)
+        temp = max(0.01, min(2.0, base_temperature * mult))
+
+        out = llm(patched_prompt, max_tokens=chunk_tokens, temperature=temp)
+        text_out = ""
+        if isinstance(out, dict):
+            try:
+                text_out = out.get("choices", [{"text": ""}])[0].get("text", "")
+            except Exception:
+                text_out = out.get("text", "") if isinstance(out, dict) else ""
+        else:
+            try:
+                text_out = str(out)
+            except Exception:
+                text_out = ""
+
+        text_out = (text_out or "").strip()
+        if not text_out:
+            break
+
+        overlap = 0
+        max_ol = min(30, len(prev_tail), len(text_out))
+        for olen in range(max_ol, 0, -1):
+            if prev_tail.endswith(text_out[:olen]):
+                overlap = olen
+                break
+
+        append_text = text_out[overlap:] if overlap else text_out
+        assembled += append_text
+        prev_tail = assembled[-120:] if len(assembled) > 120 else assembled
+
+        if assembled.strip().endswith(("Low", "Medium", "High")):
+            break
+        if len(text_out.split()) < max(4, chunk_tokens // 8):
+            break
+
+        cur_prompt = prompt + "\n\nAssistant so far:\n" + assembled + "\n\nContinue:"
+
+    return assembled.strip()
+
+
+def build_road_scanner_prompt(data: dict, include_system_entropy: bool = True) -> str:
+    entropy_text = "entropic_score=unknown"
+    if include_system_entropy:
+        metrics = collect_system_metrics()
+        rgb = metrics_to_rgb(metrics)
+        score = pennylane_entropic_score(rgb)
+        entropy_text = entropic_summary_text(score)
+        metrics_line = "sys_metrics: cpu={cpu:.2f},mem={mem:.2f},load={load1:.2f},temp={temp:.2f},proc={proc:.2f}".format(
+            cpu=metrics.get("cpu", 0.0),
+            mem=metrics.get("mem", 0.0),
+            load1=metrics.get("load1", 0.0),
+            temp=metrics.get("temp", 0.0),
+            proc=metrics.get("proc", 0.0),
+        )
+    else:
+        metrics_line = "sys_metrics: disabled"
+
+    tpl = (
+        "You are a Hypertime Nanobot specialized Road Risk Classification AI trained to evaluate real-world driving scenes.\n"
+        "Analyze and Triple Check the environmental and sensor data and determine the overall road risk level.\n"
+        "Your reply must be only one word: Low, Medium, or High.\n\n"
+        "[tuning]\n"
+        "Scene details:\n"
+        f"Location: {data.get('location','unspecified location')}\n"
+        f"Road type: {data.get('road_type','unknown')}\n"
+        f"Weather: {data.get('weather','unknown')}\n"
+        f"Traffic: {data.get('traffic','unknown')}\n"
+        f"Obstacles: {data.get('obstacles','none')}\n"
+        f"Sensor notes: {data.get('sensor_notes','none')}\n"
+        f"{metrics_line}\n"
+        f"Quantum State: {entropy_text}\n"
+        "[/tuning]\n\n"
+        "Follow these strict rules when forming your decision:\n"
+        "- Think through all scene factors internally but do not show reasoning.\n"
+        "- Evaluate surface, visibility, weather, traffic, and obstacles holistically.\n"
+        "- Optionally use the system entropic signal to bias your internal confidence slightly.\n"
+        "- Choose only one risk level that best fits the entire situation.\n"
+        "- Output exactly one word, with no punctuation or labels.\n"
+        "- The valid outputs are only: Low, Medium, High.\n\n"
+        "[action]\n"
+        "1) Normalize sensor inputs to comparable scales.\n"
+        "3) Map environmental risk cues -> discrete label using conservative thresholds.\n"
+        "4) If sensor integrity anomalies are detected, bias toward higher risk.\n"
+        "5) PUNKD: detect key tokens and locally adjust attention/temperature slightly to focus decisions.\n"
+        "6) Do not output internal reasoning or diagnostics; only return the single-word label.\n"
+        "[/action]\n\n"
+        "[replytemplate]\n"
+        "Low | Medium | High\n"
+        "[/replytemplate]"
+    )
+    return tpl
+
 def llama_local_predict_risk(scene: dict) -> Optional[str]:
     llm = llama_load()
     if llm is None:
         return None
-    prompt = build_local_risk_prompt(scene)
+
+    # Use PQE: system metrics -> RGB -> entropic score (PennyLane when available) and PUNKD chunked generation.
+    prompt = build_road_scanner_prompt(scene, include_system_entropy=True)
+
     try:
-        out = llm(prompt, max_tokens=8, temperature=0.15)
-        text = ""
-        if isinstance(out, dict):
-            try:
-                text = out.get("choices", [{"text": ""}])[0].get("text", "")
-            except Exception:
-                text = out.get("text", "")
-        else:
-            text = str(out)
-        return _llama_one_word_from_text(text)
+        text_out = ""
+        # Prefer chunked generation to reduce partial/poisoned outputs.
+        try:
+            text_out = chunked_generate(
+                llm=llm,
+                prompt=prompt,
+                max_total_tokens=96,
+                chunk_tokens=32,
+                base_temperature=0.18,
+                punkd_profile="balanced",
+            )
+        except Exception:
+            text_out = ""
+
+        if not text_out:
+            out = llm(prompt, max_tokens=16, temperature=0.15)
+            if isinstance(out, dict):
+                try:
+                    text_out = out.get("choices", [{"text": ""}])[0].get("text", "")
+                except Exception:
+                    text_out = out.get("text", "")
+            else:
+                text_out = str(out)
+
+        return _llama_one_word_from_text(text_out)
     except Exception as e:
         logger.debug(f"Local llama inference failed: {e}")
         return None
@@ -7692,7 +8138,6 @@ async def reverse_geocode_route():
 
     location = await fetch_street_name_llm(lat, lon, preferred_model=preferred)
     return jsonify({"street_name": location}), 200
-
 
     
 if __name__ == '__main__':
