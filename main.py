@@ -2223,17 +2223,32 @@ def _get_userid_or_abort() -> int:
     return int(uid or -1)
 
 def blog_get_by_slug(slug: str, allow_any_status: bool=False) -> Optional[dict]:
-    if not _valid_slug(slug): return None
+    if not _valid_slug(slug): 
+        return None
     with sqlite3.connect(DB_FILE) as db:
         cur = db.cursor()
         if allow_any_status:
-            cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE slug=? LIMIT 1", (slug,))
+            cur.execute("""
+                SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,
+                       created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val
+                FROM blog_posts 
+                WHERE slug=? 
+                LIMIT 1
+            """, (slug,))
         else:
-            cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE slug=? AND status='published' LIMIT 1", (slug,))
+            cur.execute("""
+                SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,
+                       created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val
+                FROM blog_posts 
+                WHERE slug=? AND status=? 
+                LIMIT 1
+            """, (slug, "published"))
         row = cur.fetchone()
-    if not row: return None
+    if not row:
+        return None
     post = {
-        "id": row[0], "slug": row[1],
+        "id": row[0],
+        "slug": row[1],
         "title": blog_decrypt(row[2]),
         "content": blog_decrypt(row[3]),
         "summary": blog_decrypt(row[4]),
@@ -2244,7 +2259,8 @@ def blog_get_by_slug(slug: str, allow_any_status: bool=False) -> Optional[dict]:
         "author_id": row[9],
         "sig_alg": row[10] or "",
         "sig_pub_fp8": row[11] or "",
-        "sig_val": row[12] if isinstance(row[12], (bytes,bytearray)) else (row[12].encode() if row[12] else b""),
+        "sig_val": row[12] if isinstance(row[12], (bytes, bytearray))
+            else (row[12].encode() if row[12] else b""),
     }
     return post
     
@@ -2252,58 +2268,56 @@ def blog_list_published(limit: int = 25, offset: int = 0) -> list[dict]:
     with sqlite3.connect(DB_FILE) as db:
         cur = db.cursor()
         cur.execute("""
-            SELECT id,slug,title_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id
+            SELECT id,slug,title_enc,summary_enc,tags_enc,status,
+                   created_at,updated_at,author_id
             FROM blog_posts
-            WHERE status='published'
+            WHERE status=?
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
-        """, (int(limit), int(offset)))
+        """, ("published", int(limit), int(offset)))
         rows = cur.fetchall()
-    out = []
+    out: list[dict] = []
     for r in rows:
         out.append({
-            "id": r[0], "slug": r[1],
+            "id": r[0],
+            "slug": r[1],
             "title": blog_decrypt(r[2]),
             "summary": blog_decrypt(r[3]),
             "tags": blog_decrypt(r[4]),
             "status": r[5],
-            "created_at": r[6], "updated_at": r[7],
+            "created_at": r[6],
+            "updated_at": r[7],
             "author_id": r[8],
         })
     return out
 
 def blog_list_featured(limit: int = 6) -> list[dict]:
-   
     with sqlite3.connect(DB_FILE) as db:
         cur = db.cursor()
-        cur.execute(
-            """
-            SELECT id,slug,title_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,featured,featured_rank
+        cur.execute("""
+            SELECT id,slug,title_enc,summary_enc,tags_enc,status,
+                   created_at,updated_at,author_id,featured,featured_rank
             FROM blog_posts
-            WHERE status='published' AND featured=1
+            WHERE status=? AND featured=?
             ORDER BY featured_rank DESC, created_at DESC
             LIMIT ?
-            """,
-            (int(limit),),
-        )
+        """, ("published", 1, int(limit)))
         rows = cur.fetchall()
     out: list[dict] = []
     for r in rows:
-        out.append(
-            {
-                "id": r[0],
-                "slug": r[1],
-                "title": blog_decrypt(r[2]),
-                "summary": blog_decrypt(r[3]),
-                "tags": blog_decrypt(r[4]),
-                "status": r[5],
-                "created_at": r[6],
-                "updated_at": r[7],
-                "author_id": r[8],
-                "featured": int(r[9] or 0),
-                "featured_rank": int(r[10] or 0),
-            }
-        )
+        out.append({
+            "id": r[0],
+            "slug": r[1],
+            "title": blog_decrypt(r[2]),
+            "summary": blog_decrypt(r[3]),
+            "tags": blog_decrypt(r[4]),
+            "status": r[5],
+            "created_at": r[6],
+            "updated_at": r[7],
+            "author_id": r[8],
+            "featured": int(r[9] or 0),
+            "featured_rank": int(r[10] or 0),
+        })
     return out
 
 def blog_list_home(limit: int = 3) -> list[dict]:
