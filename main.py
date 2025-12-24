@@ -1,5 +1,6 @@
 
 
+
 from __future__ import annotations 
 import logging
 import httpx
@@ -4059,7 +4060,7 @@ EXAMPLE
 """.strip()
 
 # -----------------------------
-# LLM Providers: OpenAI / Grok / Local Llama
+# LLM Providers: OpenAI / Gemini / Grok / Local Llama
 # -----------------------------
 
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -4135,6 +4136,102 @@ async def run_openai_response_text(
     except Exception as e:
         logger.debug(f"OpenAI call failed: {e}")
         return None
+
+
+# -----------------------------
+# Gemini (Google AI Studio / Gemini Developer API)
+# - Set GEMINI_API_KEY or GOOGLE_API_KEY
+# - Optional: GEMINI_MODEL (default: gemini-2.5-flash)
+# Docs: https://generativelanguage.googleapis.com/v1beta/models/*:generateContent
+# -----------------------------
+
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+_GEMINI_ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
+
+def _gemini_api_key() -> Optional[str]:
+    # Gemini Developer API: either env var is accepted; GOOGLE_API_KEY typically takes precedence in Google's SDKs.
+    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+def _maybe_gemini_async_client() -> Optional[httpx.AsyncClient]:
+    global _GEMINI_ASYNC_CLIENT
+    api_key = _gemini_api_key()
+    if not api_key:
+        return None
+    if _GEMINI_ASYNC_CLIENT is not None:
+        return _GEMINI_ASYNC_CLIENT
+    _GEMINI_ASYNC_CLIENT = httpx.AsyncClient(
+        base_url=_GEMINI_BASE_URL,
+        headers={
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        },
+        timeout=httpx.Timeout(25.0, connect=10.0),
+    )
+    return _GEMINI_ASYNC_CLIENT
+
+def _gemini_extract_output_text(data: dict) -> str:
+    # Gemini generateContent response: candidates[0].content.parts[*].text
+    if not isinstance(data, dict):
+        return ""
+    cands = data.get("candidates") or []
+    if not isinstance(cands, list) or not cands:
+        return ""
+    c0 = cands[0] if isinstance(cands[0], dict) else {}
+    content = c0.get("content") or {}
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list):
+        return ""
+    texts: list[str] = []
+    for p in parts:
+        if isinstance(p, dict) and isinstance(p.get("text"), str):
+            texts.append(p["text"])
+    return "".join(texts).strip()
+
+async def run_gemini_generate_content(
+    prompt: str,
+    model: Optional[str] = None,
+    max_output_tokens: int = 220,
+    temperature: float = 0.0,
+    response_mime_type: Optional[str] = None,
+) -> Optional[str]:
+    """Calls Gemini Developer API (generateContent) and returns the candidate text."""
+    client = _maybe_gemini_async_client()
+    if client is None:
+        return None
+
+    model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model_path = model if model.startswith("models/") else f"models/{model}"
+
+    gen_cfg: dict[str, Any] = {
+        "maxOutputTokens": int(max_output_tokens),
+        "temperature": float(temperature),
+    }
+    if response_mime_type:
+        gen_cfg["responseMimeType"] = str(response_mime_type)
+
+    payload: dict[str, Any] = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": gen_cfg,
+    }
+
+    for attempt in range(3):
+        try:
+            r = await client.post(f"/{model_path}:generateContent", json=payload)
+            if r.status_code in (429, 500, 502, 503, 504):
+                await asyncio.sleep(1.0 * (2 ** attempt))
+                continue
+            if r.status_code != 200:
+                logger.debug(f"Gemini error {r.status_code}: {r.text[:200]}")
+                return None
+            data = r.json()
+            out = _gemini_extract_output_text(data)
+            return out if out else None
+        except Exception as e:
+            logger.debug(f"Gemini call attempt {attempt+1} failed: {e}")
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+    return None
+
 
 
 try:
@@ -5216,7 +5313,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
         return True
 
     provider = (preferred_model or "").strip().lower() or None
-    if provider not in ("openai", "grok", "llama_local", None):
+    if provider not in ("openai", "gemini", "grok", "llama_local", None):
         provider = None
 
     prompt = (
@@ -5241,6 +5338,15 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
         out = await run_openai_response_text(prompt, max_output_tokens=60, temperature=0.0, reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "none"))
         if out:
             line = _clean(out.splitlines()[0])
+            if _valid(line):
+                return line
+
+
+    # Gemini fallback (or preferred if selected).
+    if provider in (None, "gemini") and _gemini_api_key():
+        out = await run_gemini_generate_content(prompt, temperature=0.0, max_output_tokens=80)
+        if out:
+            line = _clean(str(out).splitlines()[0])
             if _valid(line):
                 return line
 
@@ -5657,7 +5763,7 @@ def set_user_preferred_model(user_id: int, model_key: str) -> None:
     if not user_id:
         return
     model_key = (model_key or "").strip().lower()
-    if model_key not in ("openai", "grok", "llama_local"):
+    if model_key not in ("openai", "gemini", "grok", "llama_local"):
         model_key = "openai"
     enc = encrypt_data(model_key)
     with sqlite3.connect(DB_FILE) as db:
@@ -5827,7 +5933,7 @@ Please assess the following:
 
     # Select provider based on user choice. Keep source ASCII-only.
     selected = (selected_model or get_user_preferred_model(user_id) or "openai").strip().lower()
-    if selected not in ("openai", "grok", "llama_local"):
+    if selected not in ("openai", "gemini", "grok", "llama_local"):
         selected = "openai"
 
     report: str = ""
@@ -5846,6 +5952,14 @@ Please assess the following:
         label = llama_local_predict_risk(scene)
         report = label if label else "Medium"
         model_used = "llama_local"
+    elif selected == "gemini" and _gemini_api_key():
+        raw_report = await run_gemini_generate_content(
+            grok_prompt,
+            max_output_tokens=260,
+            temperature=0.2,
+        )
+        report = raw_report if raw_report is not None else ""
+        model_used = "gemini"
     elif selected == "grok" and os.getenv("GROK_API_KEY"):
         raw_report = await run_grok_completion(grok_prompt)
         report = raw_report if raw_report is not None else ""
@@ -5861,6 +5975,22 @@ Please assess the following:
         if raw_report:
             report = raw_report
             model_used = "openai"
+        elif _gemini_api_key():
+            raw_report_g = await run_gemini_generate_content(
+                grok_prompt,
+                max_output_tokens=260,
+                temperature=0.2,
+            )
+            if raw_report_g:
+                report = raw_report_g
+                model_used = "gemini"
+            elif os.getenv("GROK_API_KEY"):
+                raw_report2 = await run_grok_completion(grok_prompt)
+                report = raw_report2 if raw_report2 is not None else ""
+                model_used = "grok"
+            else:
+                report = "Low"
+                model_used = "offline"
         elif os.getenv("GROK_API_KEY"):
             raw_report2 = await run_grok_completion(grok_prompt)
             report = raw_report2 if raw_report2 is not None else ""
@@ -7791,6 +7921,9 @@ def dashboard():
                     <select class="form-control" id="model_selection" name="model_selection">
 
                         <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI (GPT-5.2)</option>
+{% if gemini_ready %}
+<option value="gemini" {% if preferred_model == 'gemini' %}selected{% endif %}>Google Gemini</option>
+{% endif %}
 {% if grok_ready %}
 <option value="grok" {% if preferred_model == 'grok' %}selected{% endif %}>Grok</option>
 {% endif %}
@@ -8031,6 +8164,7 @@ def dashboard():
                                   csrf_token=csrf_token,
                                   preferred_model=preferred_model,
                                   grok_ready=bool(os.getenv('GROK_API_KEY')),
+                                  gemini_ready=bool(_gemini_api_key()),
                                   llama_ready=llama_local_ready())
 
 
