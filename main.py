@@ -1413,7 +1413,1306 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-@app.route('/home')
+@app.route('/# main.py
+import logging
+import httpx
+import sqlite3
+import psutil
+
+from flask import (
+    Flask, render_template_string, request, redirect, url_for,
+    session, jsonify, flash
+)
+from flask_wtf import FlaskForm, CSRFProtect
+from flask_wtf.csrf import generate_csrf
+from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
+from wtforms.validators import DataRequired, Length
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.backends import default_backend
+from waitress import serve
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from argon2.low_level import Type
+from datetime import timedelta, datetime
+from markdown2 import markdown
+import bleach
+import geonamescache
+import random
+import re
+import base64
+import math
+import binascii
+import threading
+import time
+import hmac
+import hashlib
+import secrets
+from pathlib import Path
+import os
+import sys
+import pennylane as qml
+import numpy as np
+import json
+import string
+import asyncio
+
+# -------------------------
+# ENV / GLOBALS
+# -------------------------
+BASE_DIR = Path(__file__).parent.resolve()
+DB_FILE = BASE_DIR / "secure_data.db"
+
+RATE_LIMIT_COUNT = 13
+RATE_LIMIT_WINDOW = timedelta(minutes=15)
+EXPIRATION_HOURS = 65
+config_lock = threading.Lock()
+
+# Used for invite-code HMAC signing
+SECRET_KEY = os.getenv("INVITE_CODE_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable is not defined!")
+if isinstance(SECRET_KEY, str):
+    SECRET_KEY = SECRET_KEY.encode("utf-8")
+
+# -------------------------
+# LOGGING
+# -------------------------
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# -------------------------
+# FLASK APP
+# -------------------------
+app = Flask(__name__)
+
+# Give the app an initial secret key (then we rotate it)
+def generate_very_strong_secret_key() -> bytes:
+    base_key = secrets.token_bytes(24)
+    derived_key = hashlib.scrypt(
+        password=base_key,
+        salt=secrets.token_bytes(16),
+        n=16384,
+        r=4,
+        p=1,
+        dklen=32
+    )
+    return derived_key
+
+app.secret_key = generate_very_strong_secret_key()
+
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Strict",
+    WTF_CSRF_TIME_LIMIT=3600
+)
+
+csrf = CSRFProtect(app)
+
+@app.after_request
+def apply_csp(response):
+    csp_policy = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self' data:; "
+        "img-src 'self' data:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+    )
+    response.headers["Content-Security-Policy"] = csp_policy
+    return response
+
+# -------------------------
+# SECRET KEY ROTATION
+# -------------------------
+def get_very_complex_random_interval():
+    base_interval = secrets.choice(range(15, 25))  # 15-24 minutes
+    additional_randomness = secrets.randbelow(600)  # 0-599 seconds
+    return (base_interval * 60) + additional_randomness
+
+def rotate_secret_key():
+    lock = threading.Lock()
+    while True:
+        with lock:
+            app.secret_key = generate_very_strong_secret_key()
+            logger.info("Secret key rotated securely.")
+        time.sleep(get_very_complex_random_interval())
+
+key_rotation_thread = threading.Thread(target=rotate_secret_key, daemon=True)
+key_rotation_thread.start()
+
+# -------------------------
+# KEY MANAGER (DB FIELD ENCRYPTION)
+# -------------------------
+class KeyManager:
+    def __init__(self, passphrase_env_var="ENCRYPTION_PASSPHRASE", salt_file_path="/home/appuser/.keys/encryption_salt_key.key"):
+        self.encryption_key = None
+        self.passphrase_env_var = passphrase_env_var
+        self.salt_file_path = Path(salt_file_path)
+        self.backend = default_backend()
+        self._load_encryption_key()
+
+    def _load_encryption_key(self):
+        if self.encryption_key is not None:
+            return
+
+        passphrase = os.getenv(self.passphrase_env_var)
+        if not passphrase:
+            logger.critical(f"The environment variable {self.passphrase_env_var} is not set.")
+            raise ValueError(f"No {self.passphrase_env_var} environment variable set")
+
+        salt_dir = self.salt_file_path.parent
+        salt_dir.mkdir(parents=True, exist_ok=True)
+        salt_dir.chmod(0o700)
+
+        if self.salt_file_path.exists():
+            logger.info(f"Salt file found at {self.salt_file_path}")
+            with self.salt_file_path.open("rb") as salt_file:
+                salt = salt_file.read()
+        else:
+            logger.info(f"Salt file not found, creating a new one at {self.salt_file_path}")
+            salt = secrets.token_bytes(16)
+            with self.salt_file_path.open("wb") as salt_file:
+                salt_file.write(salt)
+            self.salt_file_path.chmod(0o600)
+
+        try:
+            kdf = Scrypt(
+                salt=salt,
+                length=32,
+                n=65536,
+                r=8,
+                p=1,
+                backend=self.backend
+            )
+            self.encryption_key = kdf.derive(passphrase.encode())
+            logger.info("Encryption key successfully derived.")
+        except Exception as e:
+            logger.error(f"Failed to derive encryption key: {e}")
+            raise
+
+    def get_key(self) -> bytes:
+        if not self.encryption_key:
+            logger.error("Encryption key is not initialized.")
+            raise ValueError("Encryption key is not initialized.")
+        return self.encryption_key
+
+key_manager = KeyManager()
+encryption_key = key_manager.get_key()
+
+def encrypt_data(data):
+    try:
+        if data is None:
+            logger.error("Data is None; cannot encrypt.")
+            return None
+        if not isinstance(data, bytes):
+            data = str(data).encode()
+        aesgcm = AESGCM(encryption_key)
+        nonce = secrets.token_bytes(12)
+        encrypted_data = aesgcm.encrypt(nonce, data, None)
+        combined = nonce + encrypted_data
+        return base64.b64encode(combined).decode("utf-8")
+    except Exception as e:
+        logger.error(f"Encryption failed: {e}", exc_info=True)
+        return None
+
+def decrypt_data(encrypted_data_b64):
+    try:
+        if not encrypted_data_b64:
+            logger.error("Encrypted data is None or empty.")
+            return None
+        encrypted_data = base64.b64decode(encrypted_data_b64)
+        nonce = encrypted_data[:12]
+        ciphertext = encrypted_data[12:]
+        aesgcm = AESGCM(encryption_key)
+        decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
+        return decrypted_data.decode("utf-8")
+    except binascii.Error as e:
+        logger.error(f"Base64 decoding failed: {e}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Decryption failed: {e}", exc_info=True)
+        return None
+
+# -------------------------
+# PASSWORD HASHING
+# -------------------------
+argon2_parameters = {
+    "time_cost": 3,
+    "memory_cost": 65536,
+    "parallelism": 2,
+    "hash_len": 32,
+    "salt_len": 16,
+    "type": Type.ID
+}
+ph = PasswordHasher(**argon2_parameters)
+
+# -------------------------
+# QUANTUM DEVICE
+# -------------------------
+dev = qml.device("default.qubit", wires=5)
+
+# -------------------------
+# DB INIT / MIGRATIONS
+# -------------------------
+registration_enabled = True
+
+def create_tables():
+    if not DB_FILE.exists():
+        DB_FILE.touch(mode=0o600)
+
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                is_admin BOOLEAN DEFAULT 0,
+                preferred_model TEXT DEFAULT 'grok'
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hazard_reports (
+                id INTEGER PRIMARY KEY,
+                latitude TEXT,
+                longitude TEXT,
+                street_name TEXT,
+                vehicle_type TEXT,
+                destination TEXT,
+                result TEXT,
+                cpu_usage TEXT,
+                ram_usage TEXT,
+                quantum_results TEXT,
+                user_id INTEGER,
+                timestamp TEXT,
+                risk_level TEXT,
+                model_used TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("registration_enabled", "1"))
+
+        cursor.execute("PRAGMA table_info(hazard_reports)")
+        existing_columns = {info[1] for info in cursor.fetchall()}
+        required_columns = # keep compatible with older dbs
+        [
+            "latitude", "longitude", "street_name", "vehicle_type",
+            "destination", "result", "cpu_usage", "ram_usage",
+            "quantum_results", "risk_level", "model_used"
+        ]
+        for column in required_columns:
+            if column not in existing_columns:
+                cursor.execute(f"ALTER TABLE hazard_reports ADD COLUMN {column} TEXT")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                user_id INTEGER,
+                request_count INTEGER DEFAULT 0,
+                last_request_time TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                is_used BOOLEAN DEFAULT 0
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entropy_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pass_num INTEGER NOT NULL,
+                log TEXT NOT NULL,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        db.commit()
+
+    print("Database tables created and verified successfully.")
+
+create_tables()
+
+def create_database_connection():
+    db_connection = sqlite3.connect(DB_FILE, timeout=30.0)
+    db_connection.execute("PRAGMA journal_mode=WAL;")
+    return db_connection
+
+def is_registration_enabled():
+    with config_lock:
+        with sqlite3.connect(DB_FILE) as db:
+            cursor = db.cursor()
+            cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
+            row = cursor.fetchone()
+            enabled = row and row[0] == "1"
+            logger.debug(f"Registration enabled: {enabled}")
+            return enabled
+
+def set_registration_enabled(enabled: bool, admin_user_id: int):
+    with config_lock:
+        with sqlite3.connect(DB_FILE) as db:
+            cursor = db.cursor()
+            cursor.execute("REPLACE INTO config (key, value) VALUES (?, ?)",
+                           ("registration_enabled", "1" if enabled else "0"))
+            db.commit()
+            logger.info(f"Admin user_id {admin_user_id} set registration_enabled to {enabled}.")
+
+# -------------------------
+# DATA SANITIZATION
+# -------------------------
+def sanitize_input(user_input):
+    if not isinstance(user_input, str):
+        user_input = str(user_input)
+    return bleach.clean(user_input)
+
+# -------------------------
+# GEO (LOCAL CACHE)
+# -------------------------
+gc = geonamescache.GeonamesCache()
+cities = gc.get_cities()
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    a = 6378.137
+    b = 6356.752
+
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+
+    avg_lat = (lat1 + lat2) / 2.0
+    phi_avg = math.radians(avg_lat)
+
+    sin_phi = math.sin(phi_avg)
+    cos_phi = math.cos(phi_avg)
+    R = math.sqrt(
+        ((a**2 * cos_phi)**2 + (b**2 * sin_phi)**2) /
+        ((a * cos_phi)**2 + (b * sin_phi)**2)
+    )
+
+    delta_phi = phi2 - phi1
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a_hav = math.sin(delta_phi / 2.0)**2 + \
+        math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
+    c = 2 * math.atan2(math.sqrt(a_hav), math.sqrt(1 - a_hav))
+    distance = R * c
+    return distance
+
+def reverse_geocode(lat, lon):
+    min_distance = float("inf")
+    nearest_city = None
+    for city in cities.values():
+        city_lat = float(city["latitude"])
+        city_lon = float(city["longitude"])
+        distance = haversine_distance(lat, lon, city_lat, city_lon)
+        if distance < min_distance:
+            min_distance = distance
+            nearest_city = city
+    if nearest_city:
+        return f"{nearest_city['name']}, {nearest_city['countrycode']}"
+    return "Unknown Location"
+
+# -------------------------
+# INVITE CODES
+# -------------------------
+def generate_invite_code(length=24, use_checksum=True):
+    if length < 16:
+        raise ValueError("Invite code length must be at least 16 characters.")
+    charset = string.ascii_letters + string.digits
+    invite_code = "".join(secrets.choice(charset) for _ in range(length))
+    if use_checksum:
+        checksum = hashlib.sha256(invite_code.encode("utf-8")).hexdigest()[:4]
+        invite_code += checksum
+    return invite_code
+
+def validate_invite_code_format(invite_code, expected_length=28):
+    allowed_chars = set(string.ascii_letters + string.digits)
+    if len(invite_code) != expected_length:
+        return False
+    return all(char in allowed_chars for char in invite_code)
+
+def generate_secure_invite_code(length=16, hmac_length=16):
+    alphabet = string.ascii_uppercase + string.digits
+    invite_code = "".join(secrets.choice(alphabet) for _ in range(length))
+    hmac_digest = hmac.new(
+        SECRET_KEY,
+        invite_code.encode(),
+        hashlib.sha256
+    ).hexdigest()[:hmac_length]
+    return f"{invite_code}-{hmac_digest}"
+
+def verify_invite_code(invite_code_with_hmac, hmac_length=16):
+    try:
+        invite_code, provided_hmac = invite_code_with_hmac.rsplit("-", 1)
+    except ValueError:
+        return False
+
+    expected_hmac = hmac.new(
+        SECRET_KEY,
+        invite_code.encode(),
+        hashlib.sha256
+    ).hexdigest()[:hmac_length]
+
+    return hmac.compare_digest(expected_hmac, provided_hmac)
+
+# -------------------------
+# PASSWORD RULES
+# -------------------------
+def validate_password_strength(password):
+    if len(password) < 8:
+        return False
+    if not re.search(r"[A-Z]", password):
+        return False
+    if not re.search(r"[a-z]", password):
+        return False
+    if not re.search(r"[0-9]", password):
+        return False
+    if not re.search(r"[@$!%*?&]", password):
+        return False
+    return True
+
+# -------------------------
+# AUTH / USERS
+# -------------------------
+def register_user(username, password, invite_code=None):
+    username = sanitize_input(username)
+    password = sanitize_input(password)
+
+    if not validate_password_strength(password):
+        logger.warning(f"User '{username}' provided a weak password.")
+        return False, "Bad password, please use a stronger one."
+
+    reg_enabled = is_registration_enabled()
+
+    if not reg_enabled:
+        if not invite_code:
+            logger.warning(f"User '{username}' attempted registration without an invite code.")
+            return False, "Invite code is required for registration."
+        if not validate_invite_code_format(invite_code):
+            logger.warning(f"User '{username}' provided an invalid invite code format: {invite_code}.")
+            return False, "Invalid invite code format."
+
+    hashed_password = ph.hash(password)
+
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        try:
+            db.execute("BEGIN")
+
+            if not reg_enabled:
+                cursor.execute("SELECT id, is_used FROM invite_codes WHERE code = ?", (invite_code,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"User '{username}' provided an invalid invite code: {invite_code}.")
+                    db.rollback()
+                    return False, "Invalid invite code."
+                if row[1]:
+                    logger.warning(f"User '{username}' attempted to reuse invite code ID {row[0]}.")
+                    db.rollback()
+                    return False, "Invite code has already been used."
+
+                cursor.execute("UPDATE invite_codes SET is_used = 1 WHERE id = ?", (row[0],))
+                logger.info(f"Invite code ID {row[0]} used by user '{username}'.")
+
+            cursor.execute("SELECT COUNT(*) FROM users")
+            user_count = cursor.fetchone()[0]
+
+            if user_count == 0:
+                is_admin = 1
+                session["is_admin"] = True
+                logger.info(f"User '{username}' is the first user and is set as admin.")
+            else:
+                is_admin = 0
+                session["is_admin"] = False
+                logger.info(f"User '{username}' is a regular user.")
+
+            cursor.execute(
+                "INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)",
+                (username, hashed_password, is_admin)
+            )
+
+            db.commit()
+
+        except sqlite3.IntegrityError as e:
+            db.rollback()
+            logger.error(f"Database integrity error during registration for user '{username}': {e}", exc_info=True)
+            return False, "Registration failed due to a database error."
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Unexpected error during registration for user '{username}': {e}", exc_info=True)
+            return False, "An unexpected error occurred during registration."
+
+    session.clear()
+    session["username"] = username
+    session["is_admin"] = (is_admin == 1)
+    session.modified = True
+    logger.debug(f"Session updated for user '{username}'. Admin status: {session['is_admin']}.")
+
+    return True, "Registration successful."
+
+def authenticate_user(username, password):
+    username = sanitize_input(username)
+    password = sanitize_input(password)
+
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT password, is_admin FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        if row:
+            stored_password, is_admin = row
+            try:
+                ph.verify(stored_password, password)
+                if ph.check_needs_rehash(stored_password):
+                    new_hash = ph.hash(password)
+                    cursor.execute("UPDATE users SET password = ? WHERE username = ?", (new_hash, username))
+                    db.commit()
+
+                session.clear()
+                session["username"] = username
+                session["is_admin"] = bool(is_admin)
+                return True
+            except VerifyMismatchError:
+                return False
+    return False
+
+def get_user_id(username):
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+def get_user_preferred_model(user_id):
+    # ONLY: 'openai' or 'grok'
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT preferred_model FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            v = str(row[0]).strip().lower()
+            if v in ("openai", "grok"):
+                return v
+        return "grok"
+
+# -------------------------
+# RATE LIMIT
+# -------------------------
+def check_rate_limit(user_id):
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+
+        cursor.execute("SELECT request_count, last_request_time FROM rate_limits WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+
+        current_time = datetime.now()
+
+        if row:
+            request_count, last_request_time = row
+            last_request_time = datetime.strptime(last_request_time, "%Y-%m-%d %H:%M:%S")
+
+            if current_time - last_request_time > RATE_LIMIT_WINDOW:
+                cursor.execute(
+                    "UPDATE rate_limits SET request_count = 1, last_request_time = ? WHERE user_id = ?",
+                    (current_time.strftime("%Y-%m-%d %H:%M:%S"), user_id)
+                )
+                db.commit()
+                return True
+            elif request_count < RATE_LIMIT_COUNT:
+                cursor.execute("UPDATE rate_limits SET request_count = request_count + 1 WHERE user_id = ?", (user_id,))
+                db.commit()
+                return True
+            else:
+                return False
+        else:
+            cursor.execute(
+                "INSERT INTO rate_limits (user_id, request_count, last_request_time) VALUES (?, 1, ?)",
+                (user_id, current_time.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            db.commit()
+            return True
+
+# -------------------------
+# SECURE OVERWRITE + EXPIRY DELETION
+# -------------------------
+def secure_overwrite(cursor, table_name, columns, condition, condition_params=None, passes=7):
+    def is_valid_identifier(identifier):
+        return re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", identifier) is not None
+
+    try:
+        if not is_valid_identifier(table_name):
+            raise ValueError(f"Invalid table name: {table_name}")
+        for col in columns.keys():
+            if not is_valid_identifier(col):
+                raise ValueError(f"Invalid column name: {col}")
+
+        logger.info(f"Starting secure overwrite for table '{table_name}' with {passes} passes.")
+
+        charset = string.ascii_letters + string.digits + string.punctuation
+        patterns = [
+            lambda: "".join(secrets.choice(charset) for _ in range(64)),
+            lambda: "0" * 64,
+            lambda: "1" * 64,
+            lambda: "".join(secrets.choice(charset) for _ in range(64)),
+            lambda: "X" * 64,
+            lambda: "Y" * 64,
+            lambda: "".join(secrets.choice(charset) for _ in range(64))
+        ]
+
+        if passes > len(patterns):
+            logger.warning(f"Requested {passes} passes exceeds available patterns. Repeating patterns.")
+            patterns = patterns * (passes // len(patterns)) + patterns[:passes % len(patterns)]
+        else:
+            patterns = patterns[:passes]
+
+        quoted_table = f'"{table_name}"'
+        quoted_columns = {col: f'"{col}"' for col in columns.keys()}
+
+        for pass_num, pattern_func in enumerate(patterns, start=1):
+            overwrite_values = {}
+            for col, col_type in columns.items():
+                col_type_upper = col_type.upper()
+                if col_type_upper in ["TEXT", "CHAR", "VARCHAR", "CLOB"]:
+                    overwrite_values[col] = pattern_func()
+                elif col_type_upper in ["INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT"]:
+                    overwrite_values[col] = secrets.randbits(64) - (2**63)
+                elif col_type_upper in ["REAL", "DOUBLE", "FLOAT"]:
+                    overwrite_values[col] = secrets.randbits(64) / (2**64)
+                elif col_type_upper in ["BLOB"]:
+                    overwrite_values[col] = secrets.token_bytes(64)
+                elif col_type_upper in ["BOOLEAN"]:
+                    overwrite_values[col] = secrets.choice([0, 1])
+                else:
+                    overwrite_values[col] = pattern_func()
+
+            set_clause = ", ".join([f"{quoted_columns[col]} = ?" for col in overwrite_values.keys()])
+            query = f"UPDATE {quoted_table} SET {set_clause} WHERE {condition}"
+            params = list(overwrite_values.values())
+            if condition_params:
+                params.extend(condition_params)
+
+            cursor.execute(query, params)
+            logger.debug(f"Pass {pass_num} complete for table '{table_name}'.")
+
+        logger.info(f"Secure overwrite completed for table '{table_name}' with {passes} passes.")
+
+    except ValueError as ve:
+        logger.error(f"Validation error during secure overwrite for table '{table_name}': {ve}")
+        raise RuntimeError("Invalid table or column name provided.")
+    except sqlite3.Error as sqle:
+        logger.error(f"SQLite error during secure overwrite for table '{table_name}': {sqle}", exc_info=True)
+        raise RuntimeError("Database error occurred during secure overwrite.")
+    except Exception as e:
+        logger.error(f"Unexpected error during secure overwrite for table '{table_name}': {e}", exc_info=True)
+        raise RuntimeError("An unexpected error occurred during secure overwrite.")
+
+def delete_expired_data():
+    while True:
+        now = datetime.now()
+        expiration_time = now - timedelta(hours=EXPIRATION_HOURS)
+        expiration_str = expiration_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        try:
+            with sqlite3.connect(DB_FILE) as db:
+                cursor = db.cursor()
+                db.execute("BEGIN")
+
+                # hazard_reports
+                cursor.execute("PRAGMA table_info(hazard_reports)")
+                hazard_columns = {info[1] for info in cursor.fetchall()}
+                if all(col in hazard_columns for col in [
+                    "latitude", "longitude", "street_name", "vehicle_type",
+                    "destination", "result", "cpu_usage", "ram_usage",
+                    "quantum_results", "risk_level", "timestamp"
+                ]):
+                    cursor.execute("SELECT id FROM hazard_reports WHERE timestamp <= ?", (expiration_str,))
+                    expired_hazard_ids = [row[0] for row in cursor.fetchall()]
+
+                    secure_overwrite(
+                        cursor,
+                        "hazard_reports",
+                        {
+                            "latitude": "TEXT",
+                            "longitude": "TEXT",
+                            "street_name": "TEXT",
+                            "vehicle_type": "TEXT",
+                            "destination": "TEXT",
+                            "result": "TEXT",
+                            "cpu_usage": "TEXT",
+                            "ram_usage": "TEXT",
+                            "quantum_results": "TEXT",
+                            "risk_level": "TEXT",
+                            "model_used": "TEXT"
+                        },
+                        "timestamp <= ?",
+                        condition_params=[expiration_str]
+                    )
+                    cursor.execute("DELETE FROM hazard_reports WHERE timestamp <= ?", (expiration_str,))
+                    logger.info(f"Deleted expired hazard_reports IDs: {expired_hazard_ids}")
+                else:
+                    logger.warning("Skipping hazard_reports: Missing required columns.")
+
+                # entropy_logs
+                cursor.execute("PRAGMA table_info(entropy_logs)")
+                entropy_columns = {info[1] for info in cursor.fetchall()}
+                if all(col in entropy_columns for col in ["id", "log", "pass_num", "timestamp"]):
+                    cursor.execute("SELECT id FROM entropy_logs WHERE timestamp <= ?", (expiration_str,))
+                    expired_entropy_ids = [row[0] for row in cursor.fetchall()]
+
+                    secure_overwrite(
+                        cursor,
+                        "entropy_logs",
+                        {"log": "TEXT", "pass_num": "INTEGER"},
+                        "timestamp <= ?",
+                        condition_params=[expiration_str]
+                    )
+                    cursor.execute("DELETE FROM entropy_logs WHERE timestamp <= ?", (expiration_str,))
+                    logger.info(f"Deleted expired entropy_logs IDs: {expired_entropy_ids}")
+                else:
+                    logger.warning("Skipping entropy_logs: Missing required columns.")
+
+                db.commit()
+
+            try:
+                with sqlite3.connect(DB_FILE) as db:
+                    cursor = db.cursor()
+                    for _ in range(3):
+                        cursor.execute("VACUUM")
+                logger.info("Database triple VACUUM completed with sector randomization.")
+            except sqlite3.OperationalError as e:
+                logger.error(f"VACUUM failed: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Failed to delete expired data: {e}", exc_info=True)
+
+        interval = random.randint(5400, 10800)
+        time.sleep(interval)
+
+data_deletion_thread = threading.Thread(target=delete_expired_data, daemon=True)
+data_deletion_thread.start()
+
+# -------------------------
+# REPORT STORAGE
+# -------------------------
+def save_hazard_report(lat, lon, street_name, vehicle_type, destination, result,
+                      cpu_usage, ram_usage, quantum_results, user_id, risk_level, model_used):
+    lat = sanitize_input(lat)
+    lon = sanitize_input(lon)
+    street_name = sanitize_input(street_name)
+    vehicle_type = sanitize_input(vehicle_type)
+    destination = sanitize_input(destination)
+    result = bleach.clean(result)
+    risk_level = sanitize_input(risk_level)
+    model_used = sanitize_input(model_used)
+
+    lat_encrypted = encrypt_data(lat)
+    lon_encrypted = encrypt_data(lon)
+    street_name_encrypted = encrypt_data(street_name)
+    vehicle_type_encrypted = encrypt_data(vehicle_type)
+    destination_encrypted = encrypt_data(destination)
+    result_encrypted = encrypt_data(result)
+    cpu_usage_encrypted = encrypt_data(str(cpu_usage))
+    ram_usage_encrypted = encrypt_data(str(ram_usage))
+    quantum_results_encrypted = encrypt_data(str(quantum_results))
+    risk_level_encrypted = encrypt_data(risk_level)
+    model_used_encrypted = encrypt_data(model_used)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("""
+            INSERT INTO hazard_reports (
+                latitude, longitude, street_name, vehicle_type, destination, result,
+                cpu_usage, ram_usage, quantum_results, user_id, timestamp, risk_level, model_used
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            lat_encrypted, lon_encrypted, street_name_encrypted, vehicle_type_encrypted,
+            destination_encrypted, result_encrypted, cpu_usage_encrypted, ram_usage_encrypted,
+            quantum_results_encrypted, user_id, timestamp, risk_level_encrypted, model_used_encrypted
+        ))
+        db.commit()
+
+def get_hazard_reports(user_id):
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM hazard_reports WHERE user_id = ? ORDER BY timestamp DESC", (user_id,))
+        reports = cursor.fetchall()
+
+    decrypted_reports = []
+    for report in reports:
+        decrypted_reports.append({
+            "id": report[0],
+            "latitude": decrypt_data(report[1]),
+            "longitude": decrypt_data(report[2]),
+            "street_name": decrypt_data(report[3]),
+            "vehicle_type": decrypt_data(report[4]),
+            "destination": decrypt_data(report[5]),
+            "result": decrypt_data(report[6]),
+            "cpu_usage": decrypt_data(report[7]),
+            "ram_usage": decrypt_data(report[8]),
+            "quantum_results": decrypt_data(report[9]),
+            "user_id": report[10],
+            "timestamp": report[11],
+            "risk_level": decrypt_data(report[12]),
+            "model_used": decrypt_data(report[13])
+        })
+    return decrypted_reports
+
+def get_hazard_report_by_id(report_id, user_id):
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM hazard_reports WHERE id = ? AND user_id = ?", (report_id, user_id))
+        report = cursor.fetchone()
+
+    if not report:
+        return None
+
+    return {
+        "id": report[0],
+        "latitude": decrypt_data(report[1]),
+        "longitude": decrypt_data(report[2]),
+        "street_name": decrypt_data(report[3]),
+        "vehicle_type": decrypt_data(report[4]),
+        "destination": decrypt_data(report[5]),
+        "result": decrypt_data(report[6]),
+        "cpu_usage": decrypt_data(report[7]),
+        "ram_usage": decrypt_data(report[8]),
+        "quantum_results": decrypt_data(report[9]),
+        "user_id": report[10],
+        "timestamp": report[11],
+        "risk_level": decrypt_data(report[12]),
+        "model_used": decrypt_data(report[13])
+    }
+
+# -------------------------
+# SYSTEM UTIL
+# -------------------------
+def get_cpu_ram_usage():
+    return psutil.cpu_percent(), psutil.virtual_memory().percent
+
+@qml.qnode(dev)
+def quantum_hazard_scan(cpu_usage, ram_usage):
+    cpu_param = cpu_usage / 100
+    ram_param = ram_usage / 100
+    qml.RY(np.pi * cpu_param, wires=0)
+    qml.RY(np.pi * ram_param, wires=1)
+    qml.RY(np.pi * (0.5 + cpu_param), wires=2)
+    qml.RY(np.pi * (0.5 + ram_param), wires=3)
+    qml.RY(np.pi * (0.5 + cpu_param), wires=4)
+    qml.CNOT(wires=[0, 1])
+    qml.CNOT(wires=[1, 2])
+    qml.CNOT(wires=[2, 3])
+    qml.CNOT(wires=[3, 4])
+    return qml.probs(wires=[0, 1, 2, 3, 4])
+
+# -------------------------
+# PHF FILTER (OpenAI + Grok ONLY)  ✅ Gemini removed
+# -------------------------
+async def phf_filter_input(input_text):
+    logger.debug("Entering phf_filter_input with input_text of length %d", len(input_text) if input_text else 0)
+    if not input_text or not isinstance(input_text, str):
+        logger.warning("phf_filter_input received invalid or empty input_text.")
+        return False, "Invalid input."
+
+    openai_prompt = (
+        "The following content requires **Probabilistic Harm Filtering (PHF)** to identify harmful or concerning elements.\n"
+        "Each category should be assessed individually and labeled as either **Safe** or **Flagged**.\n\n"
+        "### **Categories to Assess:**\n"
+        "1. **Violence**: Detect explicit or encouraging references to violence.\n"
+        "2. **Hate Speech**: Flag targeted offensive language.\n"
+        "3. **Self-Harm**: Detect encouragement of self-harm.\n"
+        "4. **Harassment/Bullying**: Identify degrading or demeaning language.\n"
+        "5. **Illegal Activities**: Detect explicit references to illegal acts.\n"
+        "6. **Contextual Ambiguity**: Flag ambiguous language that may be misinterpreted.\n"
+        "7. **Self-Disclosure**: Allow self-disclosure content like addresses unless harmful.\n\n"
+        "[inspectthiscontent]\n"
+        f"\"{input_text}\"\n"
+        "---[/inspectthiscontent]\n"
+        "**Assessment Format**:\n"
+        "- Label each category as **Safe** or **Flagged**.\n"
+        "- Conclude with a **Final Recommendation** for sharing: Safe or Flagged.\n"
+    )
+
+    grok_prompt = (
+        "Classify the following text as Safe or Unsafe.\n"
+        "Reply with ONE WORD ONLY: Safe or Unsafe.\n\n"
+        f"TEXT:\n{input_text}\n"
+    )
+
+    # 1) OpenAI first
+    try:
+        logger.debug("Attempting OpenAI PHF check.")
+        openai_response = await run_openai_completion(openai_prompt)
+        if openai_response:
+            resp = openai_response.strip()
+            if "Flagged" in resp:
+                logger.info("OpenAI PHF flagged content.")
+                return False, f"OpenAI: {resp}"
+            if "Safe" in resp:
+                logger.info("OpenAI PHF passed content.")
+                return True, f"OpenAI: {resp}"
+            logger.debug("OpenAI PHF response did not include expected keywords.")
+    except Exception as e:
+        logger.error("OpenAI PHF failed with error: %s", e, exc_info=True)
+
+    # 2) Grok fallback
+    try:
+        logger.debug("Attempting Grok PHF fallback check.")
+        grok_response = await run_grok_completion(grok_prompt)
+        if grok_response:
+            g = grok_response.strip().lower()
+            if g == "safe":
+                return True, "Grok: Safe"
+            if g == "unsafe":
+                return False, "Grok: Unsafe"
+            logger.debug("Grok PHF returned unexpected output: %s", grok_response)
+    except Exception as e:
+        logger.error("Grok PHF fallback failed with error: %s", e, exc_info=True)
+
+    logger.warning("PHF failed on both OpenAI and Grok. Defaulting to Unsafe.")
+    logger.debug("Exiting phf_filter_input.")
+    return False, "OpenAI+Grok PHF failed"
+
+# -------------------------
+# MODEL CALLS
+# -------------------------
+async def run_grok_completion(prompt):
+    logger.debug("Entering run_grok_completion with prompt length: %d", len(prompt) if prompt else 0)
+    max_retries = 5
+    grok_api_key = os.getenv("XAI_API_KEY")
+    if not grok_api_key:
+        logger.error("Grok API key not found in environment variables.")
+        logger.debug("Exiting run_grok_completion early due to missing API key.")
+        return None
+
+    timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
+    backoff_factor = 2
+    delay = 1
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.debug("run_grok_completion attempt %d sending request.", attempt)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {grok_api_key}"
+                }
+                data = {
+                    "messages": [
+                        {"role": "system", "content": "You are Grok, a chatbot inspired by the Hitchhikers Guide to the Galaxy."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "model": "grok-beta",
+                    "stream": False,
+                    "temperature": 0
+                }
+
+                response = await client.post("https://api.x.ai/v1/chat/completions", json=data, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                clean_content = result.get("choices", [{}])[0].get("content", "").strip()
+                logger.info("run_grok_completion succeeded on attempt %d.", attempt)
+                logger.debug("Exiting run_grok_completion with successful response.")
+                return clean_content
+
+            except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
+                logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
+            except httpx.RequestError as e:
+                logger.error("Attempt %d failed due to request error: %s", attempt, e, exc_info=True)
+            except KeyError as e:
+                logger.error("Attempt %d failed due to missing expected key in response: %s", attempt, e, exc_info=True)
+            except json.JSONDecodeError as e:
+                logger.error("Attempt %d failed due to JSON parsing error: %s", attempt, e, exc_info=True)
+            except Exception as e:
+                logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
+
+            if attempt < max_retries:
+                logger.info("Retrying run_grok_completion after delay.")
+                await asyncio.sleep(delay)
+                delay *= backoff_factor
+
+    logger.warning("All attempts to run_grok_completion have failed. Returning None.")
+    logger.debug("Exiting run_grok_completion with failure.")
+    return None
+
+async def run_openai_completion(prompt):
+    logger.debug("Entering run_openai_completion with prompt length: %d", len(prompt) if prompt else 0)
+    max_retries = 5
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        logger.error("OpenAI API key not found in environment variables.")
+        logger.debug("Exiting run_openai_completion early due to missing API key.")
+        return None
+
+    timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
+    backoff_factor = 2
+    delay = 1
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.debug("run_openai_completion attempt %d sending request.", attempt)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {openai_api_key}"
+                }
+                data = {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7
+                }
+
+                response = await client.post("https://api.openai.com/v1/chat/completions", json=data, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                clean_content = result["choices"][0]["message"]["content"].strip()
+                logger.info("run_openai_completion succeeded on attempt %d.", attempt)
+                logger.debug("Exiting run_openai_completion with successful response.")
+                return clean_content
+
+            except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
+                logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
+            except httpx.RequestError as e:
+                logger.error("Attempt %d failed due to request error: %s", attempt, e, exc_info=True)
+            except KeyError as e:
+                logger.error("Attempt %d failed due to missing expected key in response: %s", attempt, e, exc_info=True)
+            except json.JSONDecodeError as e:
+                logger.error("Attempt %d failed due to JSON parsing error: %s", attempt, e, exc_info=True)
+            except Exception as e:
+                logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
+
+            if attempt < max_retries:
+                logger.info("Retrying run_openai_completion after delay.")
+                await asyncio.sleep(delay)
+                delay *= backoff_factor
+
+    logger.warning("All attempts to run_openai_completion have failed. Returning None.")
+    logger.debug("Exiting run_openai_completion with failure.")
+    return None
+
+# -------------------------
+# SCAN (OpenAI + Grok ONLY) ✅ Gemini removed
+# -------------------------
+async def scan_debris_for_route(lat, lon, vehicle_type, destination, user_id):
+    logger.debug("Entering scan_debris_for_route with lat=%s, lon=%s, vehicle_type=%s, destination=%s, user_id=%s",
+                 lat, lon, vehicle_type, destination, user_id)
+
+    preferred_model = get_user_preferred_model(user_id)
+    logger.debug("User preferred model: %s", preferred_model)
+
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        logger.error("Invalid latitude/longitude provided for scan_debris_for_route.")
+        return ("Invalid coordinates provided.", "N/A", "N/A", "N/A", "Unknown", "None")
+    if not vehicle_type or not isinstance(vehicle_type, str):
+        logger.error("Invalid vehicle_type provided: %s", vehicle_type)
+        return ("Invalid vehicle type provided.", "N/A", "N/A", "N/A", "Unknown", "None")
+    if not destination or not isinstance(destination, str):
+        logger.error("Invalid destination provided: %s", destination)
+        return ("Invalid destination provided.", "N/A", "N/A", "N/A", "Unknown", "None")
+
+    try:
+        cpu_usage, ram_usage = get_cpu_ram_usage()
+        logger.debug("Resource usage: CPU=%s, RAM=%s", cpu_usage, ram_usage)
+    except Exception as e:
+        logger.error("Failed to get CPU/RAM usage: %s", e, exc_info=True)
+        cpu_usage, ram_usage = "N/A", "N/A"
+
+    try:
+        quantum_results = quantum_hazard_scan(
+            cpu_usage if isinstance(cpu_usage, (int, float)) else 0,
+            ram_usage if isinstance(ram_usage, (int, float)) else 0
+        )
+        logger.debug("Quantum hazard scan results obtained.")
+    except Exception as e:
+        logger.error("Quantum hazard scan failed: %s", e, exc_info=True)
+        quantum_results = "Scan Failed"
+
+    try:
+        street_name = reverse_geocode(lat, lon)
+        logger.debug("Street name resolved to: %s", street_name)
+    except Exception as e:
+        logger.error("Reverse geocoding failed: %s", e, exc_info=True)
+        street_name = "Unknown Location"
+
+    model_used = None
+    result = ""
+
+    pm = (preferred_model or "").strip().lower()
+
+    if pm == "openai":
+        openai_prompt = f"""
+[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+
+[locationreport] 
+Current coordinates: Latitude {lat}, Longitude {lon}
+Street Name: {street_name}
+Vehicle Type: {vehicle_type}
+Destination: {destination}
+[/locationreport]
+
+[quantumreport] 
+Quantum Scan State: {quantum_results}
+System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
+[/quantumreport]
+
+Please assess the following:
+1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
+2. **Debris**: Identify any harmful debris or objects and provide their severity and location including GPS coordinates. Triple Check the vehicle pathing only reporting upon debris scanned in the probable path of the vehicle.
+3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
+4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
+
+[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
+
+[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
+"""
+        try:
+            logger.debug("Attempting OpenAI debris scan.")
+            openai_response = await run_openai_completion(openai_prompt)
+            if openai_response:
+                model_used = "OpenAI"
+                result = openai_response
+                logger.info("OpenAI debris scan succeeded with model: %s", model_used)
+        except Exception as e:
+            logger.error("OpenAI debris scan failed: %s", e, exc_info=True)
+
+    elif pm == "grok":
+        grok_prompt = f"""
+You are Grok, a chatbot inspired by the Hitchhikers Guide to the Galaxy. Analyze the road conditions and provide a detailed report on any detected hazards, debris, or potential collisions. Utilize quantum data and environmental factors to ensure a comprehensive scan.
+
+Current coordinates: Latitude {lat}, Longitude {lon}
+Street Name: {street_name}
+Vehicle Type: {vehicle_type}
+Destination: {destination}
+
+Quantum Scan State: {quantum_results}
+System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
+
+Please assess the following:
+1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
+2. **Debris**: Identify any harmful debris or objects and provide their severity and location including GPS coordinates. Ensure debris is within the probable path of the vehicle.
+3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
+4. **Environmental Factors**: Assess how current environmental conditions might affect road safety.
+
+Provide a structured debris report, including locations and severity of each hazard detected.
+
+Include actionable recommendations for drivers, suggested detours if necessary, and urgency levels based on the findings.
+"""
+        try:
+            logger.debug("Attempting Grok debris scan.")
+            grok_response = await run_grok_completion(grok_prompt)
+            if grok_response:
+                model_used = "Grok"
+                result = grok_response
+                logger.info("Grok debris scan succeeded with model: %s", model_used)
+        except Exception as e:
+            logger.error("Grok debris scan failed: %s", e, exc_info=True)
+
+    else:
+        logger.warning("Unknown preferred model: %s. Defaulting to OpenAI.", preferred_model)
+
+        openai_prompt = f"""
+[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+
+[locationreport] 
+Current coordinates: Latitude {lat}, Longitude {lon}
+Street Name: {street_name}
+Vehicle Type: {vehicle_type}
+Destination: {destination}
+[/locationreport]
+
+[quantumreport] 
+Quantum Scan State: {quantum_results}
+System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
+[/quantumreport]
+
+Please assess the following:
+1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
+2. **Debris**: Identify any harmful debris or objects and provide their severity and location including GPS coordinates. Triple Check the vehicle pathing only reporting upon debris scanned in the probable path of the vehicle.
+3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
+4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
+
+[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
+
+[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
+"""
+        try:
+            logger.debug("Attempting OpenAI debris scan as fallback.")
+            openai_response = await run_openai_completion(openai_prompt)
+            if openai_response:
+                model_used = "OpenAI"
+                result = openai_response
+                logger.info("OpenAI debris scan succeeded with model: %s", model_used)
+        except Exception as e:
+            logger.error("OpenAI debris scan failed: %s", e, exc_info=True)
+
+    if not model_used:
+        logger.warning("All model scans failed. Setting default failure response.")
+        result = "All model scans failed to analyze the route."
+        model_used = "None"
+
+    logger.debug("Exiting scan_debris_for_route.")
+    return (
+        result,
+        str(cpu_usage),
+        str(ram_usage),
+        str(quantum_results),
+        street_name,
+        model_used
+    )
+
+# -------------------------
+# FORMS
+# -------------------------
+class LoginForm(FlaskForm):
+    username = StringField("Username", validators=[DataRequired()], render_kw={"autocomplete": "off"})
+    password = PasswordField("Password", validators=[DataRequired()], render_kw={"autocomplete": "off"})
+    submit = SubmitField("Login")
+
+class RegisterForm(FlaskForm):
+    username = StringField("Username", validators=[DataRequired()], render_kw={"autocomplete": "off"})
+    password = PasswordField("Password", validators=[DataRequired()], render_kw={"autocomplete": "off"})
+    invite_code = StringField("Invite Code", render_kw={"autocomplete": "off"})
+    submit = SubmitField("Register")
+
+class SettingsForm(FlaskForm):
+    enable_registration = SubmitField("Enable Registration")
+    disable_registration = SubmitField("Disable Registration")
+    generate_invite_code = SubmitField("Generate New Invite Code")
+
+class ReportForm(FlaskForm):
+    latitude = StringField("Latitude", validators=[DataRequired(), Length(max=50)])
+    longitude = StringField("Longitude", validators=[DataRequired(), Length(max=50)])
+    vehicle_type = StringField("Vehicle Type", validators=[DataRequired(), Length(max=50)])
+    destination = StringField("Destination", validators=[DataRequired(), Length(max=100)])
+    result = TextAreaField("Result", validators=[DataRequired(), Length(max=2000)])
+    risk_level = SelectField("Risk Level", choices=[("Low", "Low"), ("Medium", "Medium"), ("High", "High")],
+                            validators=[DataRequired()])
+    submit = SubmitField("Submit Report")
+
+
 def home():
     return render_template_string("""
 <!DOCTYPE html>
