@@ -4048,12 +4048,12 @@ def _openai_extract_output_text(data: dict) -> str:
 async def run_openai_response_text(
     prompt: str,
     model: Optional[str] = None,
-    max_output_tokens: int = 1200,
-    temperature: float = 0.6,
-    reasoning_effort: str = "high",
+    max_output_tokens: int = 700,
+    temperature: float = 0.7,
+    reasoning_effort: str = "low",
     max_retries: int = 6,
     base_delay: float = 0.8,
-    max_delay: float = 50.0,
+    max_delay: float = 20.0,
     jitter_factor: float = 0.6,
 ) -> Optional[str]:
     
