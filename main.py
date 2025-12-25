@@ -250,6 +250,12 @@ dev = qml.device("default.qubit", wires=5)
 # -------------------------
 registration_enabled = True
 
+
+
+# --- FIXED SECTION ---
+
+registration_enabled = True
+
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
@@ -296,16 +302,21 @@ def create_tables():
 
         cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("registration_enabled", "1"))
+            cursor.execute(
+                "INSERT INTO config (key, value) VALUES (?, ?)",
+                ("registration_enabled", "1")
+            )
 
         cursor.execute("PRAGMA table_info(hazard_reports)")
         existing_columns = {info[1] for info in cursor.fetchall()}
-        required_columns = # keep compatible with older dbs
-        [
+
+        # keep compatible with older dbs
+        required_columns = [
             "latitude", "longitude", "street_name", "vehicle_type",
             "destination", "result", "cpu_usage", "ram_usage",
             "quantum_results", "risk_level", "model_used"
         ]
+
         for column in required_columns:
             if column not in existing_columns:
                 cursor.execute(f"ALTER TABLE hazard_reports ADD COLUMN {column} TEXT")
@@ -339,7 +350,6 @@ def create_tables():
         db.commit()
 
     print("Database tables created and verified successfully.")
-
 create_tables()
 
 def create_database_connection():
