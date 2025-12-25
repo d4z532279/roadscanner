@@ -3330,10 +3330,6 @@ def admin_blog_backup_restore():
     return redirect(url_for("admin_blog_backup_page"))
 
 
-# -----------------------------
-# Admin: Local Llama model manager (download/encrypt/decrypt)
-# -----------------------------
-
 @app.route("/admin/local_llm", methods=["GET"])
 def admin_local_llm_page():
     guard = _require_admin()
@@ -3983,7 +3979,7 @@ def _system_signals(uid: str):
 
 
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
-    # ASCII-only prompt to avoid mojibake in non-UTF8 viewers/editors.
+    
     quantum_state = sig.get("quantum_state_sig", "unavailable")
     return f"""
 ROLE
@@ -4300,7 +4296,6 @@ def _llama_one_word_from_text(text: str) -> str:
     return "Medium"
 
 def build_local_risk_prompt(scene: dict) -> str:
-    # ASCII-only prompt. One-word output required.
     return (
         "You are a Road Risk Classification AI.\\n"
         "Return exactly ONE word: Low, Medium, or High.\\n"
@@ -4320,10 +4315,7 @@ def build_local_risk_prompt(scene: dict) -> str:
         "- Output one word only.\\n"
     )
 
-# -----------------------------
-# Local Llama "PQE" risk helpers
-# (System metrics + PennyLane entropic score + PUNKD chunked gen)
-# -----------------------------
+
 
 def _read_proc_stat() -> Optional[Tuple[int, int]]:
     try:
@@ -5082,11 +5074,7 @@ def reverse_geocode(lat: float, lon: float) -> str:
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
 
-# -----------------------------
-# Reverse geocode (online first)
-# -----------------------------
-# ASCII-only: keep source UTF-8 clean to avoid mojibake in deployments.
-# Uses OpenStreetMap Nominatim if enabled, with a small in-memory cache.
+
 REVGEOCODE_ONLINE_V1 = True
 
 _REVGEOCODE_CACHE: dict[tuple[int, int], tuple[float, dict]] = {}
@@ -6007,7 +5995,7 @@ async def scan_debris_for_route(
         street_name = "Unknown Location"
 
     grok_prompt = f"""
-[action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
+[action]You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
 [locationreport]
 Current coordinates: Latitude {lat}, Longitude {lon}
 General Area Name: {street_name}
