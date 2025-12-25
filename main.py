@@ -4048,12 +4048,12 @@ def _openai_extract_output_text(data: dict) -> str:
 async def run_openai_response_text(
     prompt: str,
     model: Optional[str] = None,
-    max_output_tokens: int = 700,
+    max_output_tokens: int = 1200,
     temperature: float = 0.7,
-    reasoning_effort: str = "low",
+    reasoning_effort: str = "none",
     max_retries: int = 6,
     base_delay: float = 0.8,
-    max_delay: float = 20.0,
+    max_delay: float = 10.0,
     jitter_factor: float = 0.6,
 ) -> Optional[str]:
     
@@ -4141,10 +4141,6 @@ async def run_openai_response_text(
 
 
 LIGHTCOM_MASTER_PROMPT_V11 = r'''
-###############################################################################
-# LIGHTCOM-COLOR v1.1 — QUANTUM ROAD HAZARD SIM (SIM-ONLY, NO WEB)
-# Core Spec: Agents A1–A6 | Color GeoRuler | LMH Risks
-###############################################################################
 
 [CONTEXT]
 - Simulated environment only; no web or external data.
@@ -4322,8 +4318,7 @@ class LightComPromptGenerator:
             "- THEN output frames in order: RTS (A1) once, FSD (A2) once, SCN (A3) 1..N, RSK (A4) 1..N, AUD (A5) 1..N, AGG (A6) once (last).\\n"
             "- NO prose. NO headings. NO code fences. NO extra lines.\\n"
             "- NO blank lines anywhere in the output.\\n"
-            "- A6 sector labels MUST be only: ⬛ 🟧 🟥\\n"
-            "- If you cannot comply, output ONLY: <LOCK-FAIL>\\n"
+            "- A6 sector labels MUST be only:YOU MUST SIMULATE ANS TRIPLE CHECK OUTPUT EXCELLING ACCURATE ⬛ 🟧 🟥\\n"
             "[/STRUCTURE_LOCK]"
         )
 
