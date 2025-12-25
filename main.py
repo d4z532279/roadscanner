@@ -47,7 +47,7 @@ import numpy as np
 from pathlib import Path
 import os
 from statistics import mean
-import google.generativeai as genai
+
 import json
 import string
 from flask import session
