@@ -1226,7 +1226,7 @@ async def run_openai_completion(prompt):
                     "Authorization": f"Bearer {openai_api_key}"
                 }
                 data = {
-                    "model": "gpt-4o",
+                    "model": "gpt-5.2",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.7
                 }
