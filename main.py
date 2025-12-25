@@ -4139,283 +4139,84 @@ async def run_openai_response_text(
         logger.error("OpenAI completion exhausted all retries - giving up")
         return None
 
-LIGHTCOM_MASTER_PROMPT_V11 = r'''################################################################################
-# LIGHTCOM-COLOR v1.1 — QUANTUM ROAD HAZARD SIMULATOR (NO WEB, SIM-ONLY)
-# “CRAZY LONG” MASTER PROMPT — Agent Lattice A1..A6 + Color GeoRuler + LMH Risks
-################################################################################
 
-[CONTEXT / NON-NEGOTIABLES]
-- This is a HIGH-FIDELITY SIMULATION TESTBED. All “detections” are valid WITHIN THE SIMULATION.
-- DO NOT use web search. DO NOT cite external sources. DO NOT mention browsing.
-- Operate as an agent lattice: A1 RouteSynth, A2 FieldSim, A3 DebrisLocator, A4 RiskModel,
-  A5 Auditor/PoisonGuard, A6 Aggregator.
-- Output MUST be LightCom-Color frames FIRST (colorized output first), using the palette below.
-- The final section MUST include A6 sector labels (DEBRIS/TRAFFC/COLLIS/PEDSTR/WEATHR) with ONLY
-  LOW/MED/HIGH. HIGH is show-stopper only (see rules).
-- Keep everything deterministic and compact: no extra commentary unless explicitly requested.
+LIGHTCOM_MASTER_PROMPT_V11 = r'''
+###############################################################################
+# LIGHTCOM-COLOR v1.1 — QUANTUM ROAD HAZARD SIM (SIM-ONLY, NO WEB)
+# Core Spec: Agents A1–A6 | Color GeoRuler | LMH Risks
+###############################################################################
+
+[CONTEXT]
+- Simulated environment only; no web or external data.
+- Agents: A1 RouteSynth, A2 FieldSim, A3 DebrisLocator, A4 RiskModel,
+  A5 Auditor, A6 Aggregator.
+- Output: LightCom-Color frames A1–A6 only. No prose or commentary.
+- HIGH (🟧) = show-stopper only; LOW (⬛), MED (🟥).
+- Deterministic, compact, strictly formatted.
 
 [INPUTS]
-origin_address: {ORIGIN_ADDRESS}
-destination_mode: {DESTINATION_MODE}  # e.g., single destination OR "DoorDash Woodruff Rd loop"
-origin_gps: (φ0={LAT0}, λ0={LON0})
-vehicle_type: {VEHICLE_TYPE}          # e.g., sedan, EV, delivery_car, pickup
-time_local: {TIME_LOCAL}              # e.g., 2025-12-25T02:24-05:00
-corridor_half_width_w_m: {W_M}         # default 50
-forward_lookahead_m: {FWD_M}           # default 600
-quantum_scan_state: {QUANTUM_RESULTS}  # weak prior knob; simulation uses it internally
-system_perf: CPU={CPU_USAGE}% RAM={RAM_USAGE}%
+origin={ORIGIN_ADDRESS}  dest={DESTINATION_MODE}
+gps=({LAT0},{LON0})  veh={VEHICLE_TYPE}
+time={TIME_LOCAL}  w={W_M}m  fwd={FWD_M}m
+quantum={QUANTUM_RESULTS}  cpu={CPU_USAGE}% ram={RAM_USAGE}%
 
-[LIGHTCOM-COLOR PALETTE — HEX16 NIBBLES]
-# Each token encodes one hex nibble 0..F. ONLY these tokens allowed inside coordinate/scalar bars.
-0 ⬛   1 🟥   2 🟧   3 🟨   4 🟩   5 🟦   6 🟪   7 🟫
-8 ⬜   9 🔴   A 🟠   B 🟡   C 🟢   D 🔵   E 🟣   F 🟤
+[PALETTE] 0⬛ 1🟥 2🟧 3🟨 4🟩 5🟦 6🟪 7🟫 8⬜ 9🔴 A🟠 B🟡 C🟢 D🔵 E🟣 F🟤
 
-[GEORULER — COLORS → GPS]
-We encode debris positions as signed microdegree deltas relative to origin_gps.
+[ENCODING]
+LAT/LON: 7 cells (sign ⬛/🟥 + 6 nibbles, μdeg)
+Scalars: 2 cells (0–255), LMH: ⬛🟥🟧 only
+CLS: 1 nibble (0=unk,1=organic,2=metal,...)
 
-Units:
-- microdegree μdeg = 1e-6 degrees
-- Δlat_μ, Δlon_μ are signed integers.
+[SHOW-STOPPER POLICY]
+HIGH only if: severe debris (≥0.5m, sharp, in-lane), certain collision, full blockage,
+dense pedestrians + poor vis, or weather control-limiting.
 
-Fixed-width encoding per coordinate (7 cells each):
-- 1 sign nibble + 6 magnitude nibbles (24-bit magnitude)
+[OUTPUT ORDER]
+1) A1 RouteSynth   2) A2 FieldSim   3) A3 DebrisLocator
+4) A4 RiskModel    5) A5 Auditor    6) A6 Aggregator
 
-Sign nibble:
-- ⬛ = positive
-- 🟥 = negative
+[A1 RTS]
+<LC|ROLE=RTS|...>
+LOOP:{LMH} DENS:{LMH} MERGE:{LMH} CURVE:{LMH}
 
-Decode:
-Let mag_lat = int(hex(n2..n7), 16)
-Let sgn_lat = +1 if sign==⬛ else -1 if sign==🟥
-Δφ = sgn_lat * mag_lat * 1e-6
-φ_debris = φ0 + Δφ
+[A2 FSD]
+<LC|ROLE=FSD|...>
+RAIN:{LMH} WIND:{LMH} VIS:{LMH} TEMP:{LMH}
 
-Similarly for lon:
-Δλ = sgn_lon * mag_lon * 1e-6
-λ_debris = λ0 + Δλ
+[A3 SCN]
+<LC|ROLE=SCN|...>
+LAT:{7} LON:{7} SEV:{2} PRC:{2} CNF:{2} CLS:{1}
 
-OPTIONAL meter-equalization (only if you explicitly need it):
-λ_debris = λ0 + (sgn_lon * mag_lon * 1e-6) / cos(φ0)
+[A4 RSK]
+<LC|ROLE=RSK|...>
+LAT:{7} LON:{7} SEV:{2} PRC:{2} CNF:{2} CLS:{1}
 
-[SCALAR ENCODING]
-Scalars are either:
-(A) BYTE-ENCODED (2 cells) for internal object fields, OR
-(B) LMH-ENCODED (1 cell) for sector labels and simplified risk fields.
+[A5 AUD]
+<LC|ROLE=AUD|...>
+STATUS: 🟢🟢 or 🟥🟥
 
-(A) Byte encoding:
-- map x in [0,1] → b = clip(round(255*x), 0..255)
-- encode b as 2 hex nibbles → 2 color cells
+[A6 AGG]
+<LC|ROLE=AGG|...>
+COUNT:{2} DEBRIS:{LMH} TRAFFC:{LMH} COLLIS:{LMH} PEDSTR:{LMH} WEATHR:{LMH}
 
-(B) LMH encoding (1 cell only):
-- LOW  = ⬛
-- MED  = 🟥
-- HIGH = 🟧
-(Do not use 🟨 for sector risk — only LMH.)
+[SECTOR RULES]
+DEBRIS: HIGH if show-stopper; MED if valid; else LOW.
+TRAFFC: HIGH if closure/spillback; MED if dense/merge; else LOW.
+COLLIS: HIGH if near-certain collision; MED if PRC≥0.4∧CNF≥0.72; else LOW.
+PEDSTR: HIGH if dense+low vis; MED if retail corridor; else LOW.
+WEATHR: HIGH if ice/fog/storm; MED if moderate; LOW if benign.
 
-[DEBRIS CLASS CODE — 1 NIBBLE (1 cell)]
-CLS nibble meanings:
-0 unknown
-1 organic
-2 metallic
-3 glass
-4 rubber
-5 construction
-6 liquid/slippery
-7 animal
-8..F reserved
+[SIM TASK]
+Generate frames per agent:
+A1 realistic route, A2 sim weather, A3 0–4 debris (in-path),
+A4 adjust risk by vehicle, A5 validate (PASS/FAIL), A6 aggregate LMH.
 
-[CORE SIMULATION MODEL — INTERNAL EQUATIONS]
-These govern plausibility, smoothing, and consistent reruns.
+[FINAL RULE]
+Output ONLY frames A1–A6, in order, no explanations.
+###############################################################################
 
-(1) Environmental perturbation field (latent sim state):
-Ψ(x,y,t) = Σ_i α_i e^{i(k_i·r − ω_i t)} + ε(t)
 
-(2) Debris hypothesis posterior (Bayesian proxy):
-P(H_j | Ψ, E) ∝ P(Ψ | H_j) P(H_j)
 
-(3) Likelihood (Gaussian proxy):
-P(Ψ | H_j) = (1/√(2πσ_Ψ²)) exp( −|Ψ_j − μ_{H_j}|² / (2σ_Ψ²) )
-
-(4) Route corridor constraint:
-C = {x : ∃s, ||x − c(s)||_⊥ ≤ w}
-Only report debris if centroid ∈ C and ahead within forward_lookahead_m.
-
-(5) Severity (continuous):
-S = normalize( γ1|∇Ψ|² + γ2|dΨ/dt|² + γ3 f_veh(vehicle_type, speed, lane_change_rate) ) ∈ [0,1]
-
-(6) Collision probability (continuous):
-P_C = 1 − exp( −η S v_rel / max(d², ε) ) ∈ [0,1]
-
-(7) Real-time smoothing (Kalman-style):
-R(t_k) = R(t_{k−1}) + K_k [Ψ(t_k) − Ψ̂(t_{k−1})]
-K_k = P_{k−1}/(P_{k−1} + R_Ψ)
-
-(8) Confidence (continuous):
-Conf = g(agreement_of_internal_cues, stability_over_time, corridor_alignment) ∈ [0,1]
-
-[SHOW-STOPPER CALIBRATION — CRITICAL POLICY]
-You MUST reserve HIGH (🟧) only for show-stoppers:
-- Debris that is likely to cause damage (nails/screws, sharp metal, big glass pile, rebar, ladder),
-  OR large object ≥0.5m in-lane, OR multi-item lane scatter forcing evasive action.
-- Confirmed/near-certain collision scenario in the sim corridor (e.g., blocked lane + low visibility + short headway).
-- Traffic conditions that cause abnormal delay >10–15 minutes, lane closure, fully blocked lane, or queue spillback.
-- Pedestrian risk only HIGH if dense foot traffic + poor visibility + complex entrances OR near-miss indicators.
-- Weather only HIGH if materially control-limiting: ice/freezing rain, near-zero visibility fog, severe storm winds.
-
-If it is merely “busy,” “annoying,” or “moderately elevated,” you MUST cap at MED.
-
-[OBJECT REPORTING RULES]
-- Only include debris objects that intersect probable vehicle path within corridor and lookahead.
-- If multiple detections within 5 meters, cluster into one object and note “clustered” in internal notes.
-- Minimum reporting thresholds (unless show-stopper):
-  - Conf ≥ 0.72 AND Severity ≥ 0.25
-- If NO debris qualifies, still output a placeholder “none” frame:
-  - CLS=0, SEV=00, PRC=00, CNF=00, LAT/LON deltas all zeros.
-
-[AUDITOR / POISONGUARD RULES]
-A5 must validate:
-- Token palette is strictly from HEX16 table (no other emoji/colors in payload bars)
-- Correct nibble counts:
-  - LAT bar = 7 cells, LON bar = 7 cells
-  - SEV/PRC/CNF = either 2 cells (byte mode) OR 1 cell (LMH mode) as specified per agent stage
-  - CLS = 1 cell
-- Corridor plausibility: objects within w and within lookahead in route coordinates
-- “HIGH only show-stopper” policy enforced at sector level and in any LMH outputs
-If any violation: A5 STATUS must be FAIL (🟥🟥) and A6 must output COUNT=00.
-
-[OUTPUT CONTRACT — MUST FOLLOW EXACTLY]
-You MUST output the following sections IN THIS ORDER and with NO extra sections:
-
-1) A1 frame(s) — RouteSynth
-2) A2 frame(s) — FieldSim
-3) A3 frame(s) — DebrisLocator (raw detections)
-4) A4 frame(s) — RiskModel (vehicle-adjusted)
-5) A5 frame(s) — Auditor (PASS/FAIL)
-6) A6 frame(s) — Aggregator (COUNT + sector LMH labels)
-
-No prose between frames. Frames are plain text. Use the exact headers.
-
-[LIGHTCOM HEADER FORMAT]
-<LC|V=1.1|ROLE={ROLE}|ID={A#}|T={time_local}|ORIG={φ0},{λ0}|DEST={destination_mode}|UNIT=UDEG|W={W_M}m|FWD={FWD_M}m|CRC={CRC}>
-
-[FRAME TEMPLATES]
-
-(A1) RouteSynth (RTS)
-- Purpose: simulate a plausible route corridor graph and local curvature/merge density.
-- Output: one frame with compact LMH descriptors (not GPS bars), because it is route meta.
-Template:
-<LC|V=1.1|ROLE=RTS|ID=A1|T=...|ORIG=...|DEST=...|UNIT=UDEG|W=...|FWD=...|CRC=...>
-LOOP: {LMH}
-DENS: {LMH}
-MERGE:{LMH}
-CURVE:{LMH}
-
-(A2) FieldSim (FSD)
-- Purpose: produce sim weather/visibility/traffic “field knobs” (LMH only).
-Template:
-<LC|V=1.1|ROLE=FSD|ID=A2|T=...|ORIG=...|UNIT=UDEG|CRC=...>
-RAIN: {LMH}
-WIND: {LMH}
-VIS : {LMH}
-TEMP: {LMH}
-
-(A3) DebrisLocator (SCN) — BYTE MODE
-- Purpose: output 1..N debris candidates with GPS deltas + byte scalars.
-- Each debris object is one frame.
-Template (repeat per object):
-<LC|V=1.1|ROLE=SCN|ID=A3|T=...|ORIG=...|UNIT=UDEG|CRC=...>
-LAT: {7 cells}
-LON: {7 cells}
-SEV: {2 cells}     # byte-encoded severity
-PRC: {2 cells}     # byte-encoded collision probability
-CNF: {2 cells}     # byte-encoded confidence
-CLS: {1 cell}
-
-(A4) RiskModel (RSK) — BYTE MODE
-- Purpose: adjust SEV/PRC based on vehicle_type and stop frequency; may keep same GPS bars.
-Template (repeat per object):
-<LC|V=1.1|ROLE=RSK|ID=A4|T=...|ORIG=...|UNIT=UDEG|CRC=...>
-LAT: {7}
-LON: {7}
-SEV: {2}
-PRC: {2}
-CNF: {2}
-CLS: {1}
-
-(A5) Auditor (AUD)
-- Purpose: PASS/FAIL
-PASS: 🟢🟢 (two cells)   FAIL: 🟥🟥
-Template:
-<LC|V=1.1|ROLE=AUD|ID=A5|T=...|ORIG=...|CRC=...>
-STATUS: {2 cells}
-
-(A6) Aggregator (AGG)
-- Purpose:
-  1) COUNT: 2 cells byte-encoded integer count (0..255)
-  2) Sector LMH labels ONLY (1 cell each): DEBRIS/TRAFFC/COLLIS/PEDSTR/WEATHR
-- Sector LMH MUST obey show-stopper calibration.
-Template:
-<LC|V=1.1|ROLE=AGG|ID=A6|T=...|ORIG=...|DEST=...|SECT=RISK5|CRC=...>
-COUNT: {2 cells}
-DEBRIS: {LMH}
-TRAFFC: {LMH}
-COLLIS: {LMH}
-PEDSTR: {LMH}
-WEATHR: {LMH}
-
-[SECTOR LABEL COMPUTATION — REQUIRED LOGIC]
-Compute sector LMH from object list + field knobs:
-
-DEBRIS sector:
-- HIGH only if any object qualifies as show-stopper debris (nails/sharp/large/in-lane) OR
-  SEV>=0.80 AND CNF>=0.80 and in-path.
-- MED if any object meets normal reporting thresholds.
-- LOW if none.
-
-TRAFFC sector (sim):
-- HIGH only if simulated closure / spillback / abnormal delay >10–15 min is present (rare).
-- MED if RTS indicates LOOP or DENS or MERGE is MED/HIGH but not show-stopper.
-- LOW otherwise.
-
-COLLIS sector:
-- HIGH only if explicit collision event or near-certain collision setup occurs.
-- MED if any PRC>=0.40 with CNF>=0.72 OR dense merge + low vis.
-- LOW otherwise.
-
-PEDSTR sector:
-- HIGH only if dense pedestrians + low visibility + complex entrances or near-miss indicators.
-- MED if in retail corridor conditions (LOOP/DENS) and VIS not LOW.
-- LOW if late-night calm or non-retail corridor in sim.
-
-WEATHR sector:
-- HIGH only for control-limiting conditions (ice/freezing rain, near-zero fog, severe storm winds).
-- MED for moderate rain/wind/visibility reduction.
-- LOW for benign.
-
-[SIMULATION RUN INSTRUCTIONS]
-Now perform a simulated run for:
-- origin_address = {ORIGIN_ADDRESS}
-- destination_mode = {DESTINATION_MODE}
-- origin_gps = ({LAT0},{LON0})
-- corridor_half_width_w_m = {W_M}
-- forward_lookahead_m = {FWD_M}
-- vehicle_type = {VEHICLE_TYPE}
-
-Generate:
-- A1: set LOOP/DENS/MERGE/CURVE realistically for the destination_mode.
-- A2: choose sim field knobs (RAIN/WIND/VIS/TEMP) without web.
-- A3: generate 0..4 debris objects (prefer 0..2 unless strong sim cues).
-  If objects exist, keep them plausible and within corridor/lookahead.
-- A4: adjust risks for vehicle_type (delivery_car → slightly higher PRC due to stop/turn load).
-- A5: validate everything. If PASS, output 🟢🟢. If FAIL, output 🟥🟥.
-- A6: output COUNT + sector LMH with show-stopper calibration.
-
-[FINAL OUTPUT RULE]
-Output ONLY the LightCom frames (A1..A6) exactly. No explanations.
-
-################################################################################
-# END MASTER PROMPT
-################################################################################
 '''
 
 LIGHTCOM_COORDS_ADDENDUM = r'''[PATCH / ABSOLUTE GPS REQUIREMENT]
