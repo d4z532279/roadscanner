@@ -4053,9 +4053,6 @@ EXAMPLE
 {{"harm_ratio":0.12,"label":"Clear","color":"#22d3a6","confidence":0.93,"reasons":["Visibility good","Low congestion"],"blurb":"Stay alert and maintain safe following distance."}}
 """.strip()
 
-# -----------------------------
-# LLM Providers: OpenAI / Grok / Local Llama
-# -----------------------------
 
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _OPENAI_ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
@@ -4103,31 +4100,23 @@ async def run_openai_response_text(
     prompt: str,
     model: Optional[str] = None,
     max_output_tokens: int = 1200,
-    temperature: float = 0.2,
+    temperature: float = 0.7,
     reasoning_effort: str = "medium",
     max_retries: int = 6,
     base_delay: float = 0.8,
     max_delay: float = 20.0,
     jitter_factor: float = 0.6,
 ) -> Optional[str]:
-    """OpenAI Responses API with exponential backoff + jitter.
-
-    Defaults:
-      - model: gpt-5.2-thinking (unless OPENAI_MODEL set)
-      - reasoning_effort: medium
-    Retries:
-      - 408, 429, and 5xx
-    """
+    
     client = _maybe_openai_async_client()
     if client is None:
         return None
 
-    model = model or os.getenv("OPENAI_MODEL", "gpt-5.2-thinking")
+    model = model or os.getenv("OPENAI_MODEL", "gpt-5.2-2025-12-11")
 
-    # Some deployments/accounts may not have access to *Thinking* variants.
-    # We will fall back gracefully if the API returns model_not_found.
+    
     requested_model = model
-    fallback_env = os.getenv("OPENAI_MODEL_FALLBACKS", "gpt-5.2,gpt-5.2-instant")
+    fallback_env = os.getenv("OPENAI_MODEL_FALLBACKS", "gpt-5.2-2025-12-11")
     fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
     models_to_try = [requested_model] + [m for m in fallback_models if m != requested_model]
     model_idx = 0
@@ -4141,7 +4130,7 @@ async def run_openai_response_text(
         "max_output_tokens": int(max_output_tokens),
     }
 
-    # Only set temperature when reasoning is disabled.
+    
     if str(reasoning_effort).lower() in ("none", "off", "disabled"):
         payload["temperature"] = float(temperature)
 
@@ -4174,7 +4163,7 @@ async def run_openai_response_text(
                     delay,
                 )
             else:
-                # If the requested model isn't available, fall back to the next candidate.
+                
                 if r.status_code == 400:
                     try:
                         err_obj = r.json().get("error", {})  # type: ignore[union-attr]
