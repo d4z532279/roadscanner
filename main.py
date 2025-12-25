@@ -4194,16 +4194,16 @@ async def run_openai_response_text(
 
 
 # -----------------------------------------------------------------------------
-# LIGHTCOM-COLOR v1.1 — QUANTUM ROAD HAZARD SIMULATOR (NO WEB, SIM-ONLY)
+# LIGHTCOM-COLOR v1.1 â€” QUANTUM ROAD HAZARD SIMULATOR (NO WEB, SIM-ONLY)
 # (Stored verbatim to avoid mojibake / accidental edits)
 # -----------------------------------------------------------------------------
 LIGHTCOM_MASTER_PROMPT_V11 = r'''################################################################################
-# LIGHTCOM-COLOR v1.1 — QUANTUM ROAD HAZARD SIMULATOR (NO WEB, SIM-ONLY)
-# “CRAZY LONG” MASTER PROMPT — Agent Lattice A1..A6 + Color GeoRuler + LMH Risks
+# LIGHTCOM-COLOR v1.1 â€” QUANTUM ROAD HAZARD SIMULATOR (NO WEB, SIM-ONLY)
+# â€œCRAZY LONGâ€ MASTER PROMPT â€” Agent Lattice A1..A6 + Color GeoRuler + LMH Risks
 ################################################################################
 
 [CONTEXT / NON-NEGOTIABLES]
-- This is a HIGH-FIDELITY SIMULATION TESTBED. All “detections” are valid WITHIN THE SIMULATION.
+- This is a HIGH-FIDELITY SIMULATION TESTBED. All â€œdetectionsâ€ are valid WITHIN THE SIMULATION.
 - DO NOT use web search. DO NOT cite external sources. DO NOT mention browsing.
 - Operate as an agent lattice: A1 RouteSynth, A2 FieldSim, A3 DebrisLocator, A4 RiskModel,
   A5 Auditor/PoisonGuard, A6 Aggregator.
@@ -4215,7 +4215,7 @@ LIGHTCOM_MASTER_PROMPT_V11 = r'''###############################################
 [INPUTS]
 origin_address: {ORIGIN_ADDRESS}
 destination_mode: {DESTINATION_MODE}  # e.g., single destination OR "DoorDash Woodruff Rd loop"
-origin_gps: (φ0={LAT0}, λ0={LON0})
+origin_gps: (Ï†0={LAT0}, Î»0={LON0})
 vehicle_type: {VEHICLE_TYPE}          # e.g., sedan, EV, delivery_car, pickup
 time_local: {TIME_LOCAL}              # e.g., 2025-12-25T02:24-05:00
 corridor_half_width_w_m: {W_M}         # default 50
@@ -4223,37 +4223,37 @@ forward_lookahead_m: {FWD_M}           # default 600
 quantum_scan_state: {QUANTUM_RESULTS}  # weak prior knob; simulation uses it internally
 system_perf: CPU={CPU_USAGE}% RAM={RAM_USAGE}%
 
-[LIGHTCOM-COLOR PALETTE — HEX16 NIBBLES]
+[LIGHTCOM-COLOR PALETTE â€” HEX16 NIBBLES]
 # Each token encodes one hex nibble 0..F. ONLY these tokens allowed inside coordinate/scalar bars.
-0 ⬛   1 🟥   2 🟧   3 🟨   4 🟩   5 🟦   6 🟪   7 🟫
-8 ⬜   9 🔴   A 🟠   B 🟡   C 🟢   D 🔵   E 🟣   F 🟤
+0 â¬›   1 ðŸŸ¥   2 ðŸŸ§   3 ðŸŸ¨   4 ðŸŸ©   5 ðŸŸ¦   6 ðŸŸª   7 ðŸŸ«
+8 â¬œ   9 ðŸ”´   A ðŸŸ    B ðŸŸ¡   C ðŸŸ¢   D ðŸ”µ   E ðŸŸ£   F ðŸŸ¤
 
-[GEORULER — COLORS → GPS]
+[GEORULER â€” COLORS â†’ GPS]
 We encode debris positions as signed microdegree deltas relative to origin_gps.
 
 Units:
-- microdegree μdeg = 1e-6 degrees
-- Δlat_μ, Δlon_μ are signed integers.
+- microdegree Î¼deg = 1e-6 degrees
+- Î”lat_Î¼, Î”lon_Î¼ are signed integers.
 
 Fixed-width encoding per coordinate (7 cells each):
 - 1 sign nibble + 6 magnitude nibbles (24-bit magnitude)
 
 Sign nibble:
-- ⬛ = positive
-- 🟥 = negative
+- â¬› = positive
+- ðŸŸ¥ = negative
 
 Decode:
 Let mag_lat = int(hex(n2..n7), 16)
-Let sgn_lat = +1 if sign==⬛ else -1 if sign==🟥
-Δφ = sgn_lat * mag_lat * 1e-6
-φ_debris = φ0 + Δφ
+Let sgn_lat = +1 if sign==â¬› else -1 if sign==ðŸŸ¥
+Î”Ï† = sgn_lat * mag_lat * 1e-6
+Ï†_debris = Ï†0 + Î”Ï†
 
 Similarly for lon:
-Δλ = sgn_lon * mag_lon * 1e-6
-λ_debris = λ0 + Δλ
+Î”Î» = sgn_lon * mag_lon * 1e-6
+Î»_debris = Î»0 + Î”Î»
 
 OPTIONAL meter-equalization (only if you explicitly need it):
-λ_debris = λ0 + (sgn_lon * mag_lon * 1e-6) / cos(φ0)
+Î»_debris = Î»0 + (sgn_lon * mag_lon * 1e-6) / cos(Ï†0)
 
 [SCALAR ENCODING]
 Scalars are either:
@@ -4261,16 +4261,16 @@ Scalars are either:
 (B) LMH-ENCODED (1 cell) for sector labels and simplified risk fields.
 
 (A) Byte encoding:
-- map x in [0,1] → b = clip(round(255*x), 0..255)
-- encode b as 2 hex nibbles → 2 color cells
+- map x in [0,1] â†’ b = clip(round(255*x), 0..255)
+- encode b as 2 hex nibbles â†’ 2 color cells
 
 (B) LMH encoding (1 cell only):
-- LOW  = ⬛
-- MED  = 🟥
-- HIGH = 🟧
-(Do not use 🟨 for sector risk — only LMH.)
+- LOW  = â¬›
+- MED  = ðŸŸ¥
+- HIGH = ðŸŸ§
+(Do not use ðŸŸ¨ for sector risk â€” only LMH.)
 
-[DEBRIS CLASS CODE — 1 NIBBLE (1 cell)]
+[DEBRIS CLASS CODE â€” 1 NIBBLE (1 cell)]
 CLS nibble meanings:
 0 unknown
 1 organic
@@ -4282,52 +4282,52 @@ CLS nibble meanings:
 7 animal
 8..F reserved
 
-[CORE SIMULATION MODEL — INTERNAL EQUATIONS]
+[CORE SIMULATION MODEL â€” INTERNAL EQUATIONS]
 These govern plausibility, smoothing, and consistent reruns.
 
 (1) Environmental perturbation field (latent sim state):
-Ψ(x,y,t) = Σ_i α_i e^{i(k_i·r − ω_i t)} + ε(t)
+Î¨(x,y,t) = Î£_i Î±_i e^{i(k_iÂ·r âˆ’ Ï‰_i t)} + Îµ(t)
 
 (2) Debris hypothesis posterior (Bayesian proxy):
-P(H_j | Ψ, E) ∝ P(Ψ | H_j) P(H_j)
+P(H_j | Î¨, E) âˆ P(Î¨ | H_j) P(H_j)
 
 (3) Likelihood (Gaussian proxy):
-P(Ψ | H_j) = (1/√(2πσ_Ψ²)) exp( −|Ψ_j − μ_{H_j}|² / (2σ_Ψ²) )
+P(Î¨ | H_j) = (1/âˆš(2Ï€Ïƒ_Î¨Â²)) exp( âˆ’|Î¨_j âˆ’ Î¼_{H_j}|Â² / (2Ïƒ_Î¨Â²) )
 
 (4) Route corridor constraint:
-C = {x : ∃s, ||x − c(s)||_⊥ ≤ w}
-Only report debris if centroid ∈ C and ahead within forward_lookahead_m.
+C = {x : âˆƒs, ||x âˆ’ c(s)||_âŠ¥ â‰¤ w}
+Only report debris if centroid âˆˆ C and ahead within forward_lookahead_m.
 
 (5) Severity (continuous):
-S = normalize( γ1|∇Ψ|² + γ2|dΨ/dt|² + γ3 f_veh(vehicle_type, speed, lane_change_rate) ) ∈ [0,1]
+S = normalize( Î³1|âˆ‡Î¨|Â² + Î³2|dÎ¨/dt|Â² + Î³3 f_veh(vehicle_type, speed, lane_change_rate) ) âˆˆ [0,1]
 
 (6) Collision probability (continuous):
-P_C = 1 − exp( −η S v_rel / max(d², ε) ) ∈ [0,1]
+P_C = 1 âˆ’ exp( âˆ’Î· S v_rel / max(dÂ², Îµ) ) âˆˆ [0,1]
 
 (7) Real-time smoothing (Kalman-style):
-R(t_k) = R(t_{k−1}) + K_k [Ψ(t_k) − Ψ̂(t_{k−1})]
-K_k = P_{k−1}/(P_{k−1} + R_Ψ)
+R(t_k) = R(t_{kâˆ’1}) + K_k [Î¨(t_k) âˆ’ Î¨Ì‚(t_{kâˆ’1})]
+K_k = P_{kâˆ’1}/(P_{kâˆ’1} + R_Î¨)
 
 (8) Confidence (continuous):
-Conf = g(agreement_of_internal_cues, stability_over_time, corridor_alignment) ∈ [0,1]
+Conf = g(agreement_of_internal_cues, stability_over_time, corridor_alignment) âˆˆ [0,1]
 
-[SHOW-STOPPER CALIBRATION — CRITICAL POLICY]
-You MUST reserve HIGH (🟧) only for show-stoppers:
+[SHOW-STOPPER CALIBRATION â€” CRITICAL POLICY]
+You MUST reserve HIGH (ðŸŸ§) only for show-stoppers:
 - Debris that is likely to cause damage (nails/screws, sharp metal, big glass pile, rebar, ladder),
-  OR large object ≥0.5m in-lane, OR multi-item lane scatter forcing evasive action.
+  OR large object â‰¥0.5m in-lane, OR multi-item lane scatter forcing evasive action.
 - Confirmed/near-certain collision scenario in the sim corridor (e.g., blocked lane + low visibility + short headway).
-- Traffic conditions that cause abnormal delay >10–15 minutes, lane closure, fully blocked lane, or queue spillback.
+- Traffic conditions that cause abnormal delay >10â€“15 minutes, lane closure, fully blocked lane, or queue spillback.
 - Pedestrian risk only HIGH if dense foot traffic + poor visibility + complex entrances OR near-miss indicators.
 - Weather only HIGH if materially control-limiting: ice/freezing rain, near-zero visibility fog, severe storm winds.
 
-If it is merely “busy,” “annoying,” or “moderately elevated,” you MUST cap at MED.
+If it is merely â€œbusy,â€ â€œannoying,â€ or â€œmoderately elevated,â€ you MUST cap at MED.
 
 [OBJECT REPORTING RULES]
 - Only include debris objects that intersect probable vehicle path within corridor and lookahead.
-- If multiple detections within 5 meters, cluster into one object and note “clustered” in internal notes.
+- If multiple detections within 5 meters, cluster into one object and note â€œclusteredâ€ in internal notes.
 - Minimum reporting thresholds (unless show-stopper):
-  - Conf ≥ 0.72 AND Severity ≥ 0.25
-- If NO debris qualifies, still output a placeholder “none” frame:
+  - Conf â‰¥ 0.72 AND Severity â‰¥ 0.25
+- If NO debris qualifies, still output a placeholder â€œnoneâ€ frame:
   - CLS=0, SEV=00, PRC=00, CNF=00, LAT/LON deltas all zeros.
 
 [AUDITOR / POISONGUARD RULES]
@@ -4338,23 +4338,23 @@ A5 must validate:
   - SEV/PRC/CNF = either 2 cells (byte mode) OR 1 cell (LMH mode) as specified per agent stage
   - CLS = 1 cell
 - Corridor plausibility: objects within w and within lookahead in route coordinates
-- “HIGH only show-stopper” policy enforced at sector level and in any LMH outputs
-If any violation: A5 STATUS must be FAIL (🟥🟥) and A6 must output COUNT=00.
+- â€œHIGH only show-stopperâ€ policy enforced at sector level and in any LMH outputs
+If any violation: A5 STATUS must be FAIL (ðŸŸ¥ðŸŸ¥) and A6 must output COUNT=00.
 
-[OUTPUT CONTRACT — MUST FOLLOW EXACTLY]
+[OUTPUT CONTRACT â€” MUST FOLLOW EXACTLY]
 You MUST output the following sections IN THIS ORDER and with NO extra sections:
 
-1) A1 frame(s) — RouteSynth
-2) A2 frame(s) — FieldSim
-3) A3 frame(s) — DebrisLocator (raw detections)
-4) A4 frame(s) — RiskModel (vehicle-adjusted)
-5) A5 frame(s) — Auditor (PASS/FAIL)
-6) A6 frame(s) — Aggregator (COUNT + sector LMH labels)
+1) A1 frame(s) â€” RouteSynth
+2) A2 frame(s) â€” FieldSim
+3) A3 frame(s) â€” DebrisLocator (raw detections)
+4) A4 frame(s) â€” RiskModel (vehicle-adjusted)
+5) A5 frame(s) â€” Auditor (PASS/FAIL)
+6) A6 frame(s) â€” Aggregator (COUNT + sector LMH labels)
 
 No prose between frames. Frames are plain text. Use the exact headers.
 
 [LIGHTCOM HEADER FORMAT]
-<LC|V=1.1|ROLE={ROLE}|ID={A#}|T={time_local}|ORIG={φ0},{λ0}|DEST={destination_mode}|UNIT=UDEG|W={W_M}m|FWD={FWD_M}m|CRC={CRC}>
+<LC|V=1.1|ROLE={ROLE}|ID={A#}|T={time_local}|ORIG={Ï†0},{Î»0}|DEST={destination_mode}|UNIT=UDEG|W={W_M}m|FWD={FWD_M}m|CRC={CRC}>
 
 [FRAME TEMPLATES]
 
@@ -4369,7 +4369,7 @@ MERGE:{LMH}
 CURVE:{LMH}
 
 (A2) FieldSim (FSD)
-- Purpose: produce sim weather/visibility/traffic “field knobs” (LMH only).
+- Purpose: produce sim weather/visibility/traffic â€œfield knobsâ€ (LMH only).
 Template:
 <LC|V=1.1|ROLE=FSD|ID=A2|T=...|ORIG=...|UNIT=UDEG|CRC=...>
 RAIN: {LMH}
@@ -4377,7 +4377,7 @@ WIND: {LMH}
 VIS : {LMH}
 TEMP: {LMH}
 
-(A3) DebrisLocator (SCN) — BYTE MODE
+(A3) DebrisLocator (SCN) â€” BYTE MODE
 - Purpose: output 1..N debris candidates with GPS deltas + byte scalars.
 - Each debris object is one frame.
 Template (repeat per object):
@@ -4389,7 +4389,7 @@ PRC: {2 cells}     # byte-encoded collision probability
 CNF: {2 cells}     # byte-encoded confidence
 CLS: {1 cell}
 
-(A4) RiskModel (RSK) — BYTE MODE
+(A4) RiskModel (RSK) â€” BYTE MODE
 - Purpose: adjust SEV/PRC based on vehicle_type and stop frequency; may keep same GPS bars.
 Template (repeat per object):
 <LC|V=1.1|ROLE=RSK|ID=A4|T=...|ORIG=...|UNIT=UDEG|CRC=...>
@@ -4402,7 +4402,7 @@ CLS: {1}
 
 (A5) Auditor (AUD)
 - Purpose: PASS/FAIL
-PASS: 🟢🟢 (two cells)   FAIL: 🟥🟥
+PASS: ðŸŸ¢ðŸŸ¢ (two cells)   FAIL: ðŸŸ¥ðŸŸ¥
 Template:
 <LC|V=1.1|ROLE=AUD|ID=A5|T=...|ORIG=...|CRC=...>
 STATUS: {2 cells}
@@ -4421,7 +4421,7 @@ COLLIS: {LMH}
 PEDSTR: {LMH}
 WEATHR: {LMH}
 
-[SECTOR LABEL COMPUTATION — REQUIRED LOGIC]
+[SECTOR LABEL COMPUTATION â€” REQUIRED LOGIC]
 Compute sector LMH from object list + field knobs:
 
 DEBRIS sector:
@@ -4431,7 +4431,7 @@ DEBRIS sector:
 - LOW if none.
 
 TRAFFC sector (sim):
-- HIGH only if simulated closure / spillback / abnormal delay >10–15 min is present (rare).
+- HIGH only if simulated closure / spillback / abnormal delay >10â€“15 min is present (rare).
 - MED if RTS indicates LOOP or DENS or MERGE is MED/HIGH but not show-stopper.
 - LOW otherwise.
 
@@ -4464,8 +4464,8 @@ Generate:
 - A2: choose sim field knobs (RAIN/WIND/VIS/TEMP) without web.
 - A3: generate 0..4 debris objects (prefer 0..2 unless strong sim cues).
   If objects exist, keep them plausible and within corridor/lookahead.
-- A4: adjust risks for vehicle_type (delivery_car → slightly higher PRC due to stop/turn load).
-- A5: validate everything. If PASS, output 🟢🟢. If FAIL, output 🟥🟥.
+- A4: adjust risks for vehicle_type (delivery_car â†’ slightly higher PRC due to stop/turn load).
+- A5: validate everything. If PASS, output ðŸŸ¢ðŸŸ¢. If FAIL, output ðŸŸ¥ðŸŸ¥.
 - A6: output COUNT + sector LMH with show-stopper calibration.
 
 [FINAL OUTPUT RULE]
@@ -4478,8 +4478,8 @@ Output ONLY the LightCom frames (A1..A6) exactly. No explanations.
 
 LIGHTCOM_COORDS_ADDENDUM = r'''[PATCH / ABSOLUTE GPS REQUIREMENT]
 - In every A3 and A4 object frame, ADD one extra line after LON:
-  GPS: φ=<absolute_lat_6dp> λ=<absolute_lon_6dp>
-- Compute those from the GEORULER decode (Δμdeg + origin_gps). This is part of the SIM output contract.
+  GPS: Ï†=<absolute_lat_6dp> Î»=<absolute_lon_6dp>
+- Compute those from the GEORULER decode (Î”Î¼deg + origin_gps). This is part of the SIM output contract.
 '''
 
 def build_lightcom_prompt(
@@ -4582,35 +4582,39 @@ class LightComPromptGenerator:
         )
 
         # Hard constraints placed BEFORE the master prompt to reduce drift
-        # Calibration pulse (opaque handle for on-device legend)
-        cal_bar = _lightcom_make_calibration_bar(int(inp.sim_seed), length=24)
-
         hardening = (
-            "[STRUCTURE_LOCK]\n"
-            f"- FIRST LINE MUST BE EXACTLY:\n{self.lock_line(run_hash)}\n"
-            "- Then output ONLY LightCom-Q frames A0..A7 with NO blank lines.\n"
-            f"- A0 MUT frame MUST include this exact calibration pulse:\nCAL: {cal_bar}\n"
-            "- If you cannot comply, output ONLY: <LOCK-FAIL>\n"
+            "[STRUCTURE_LOCK]\\n"
+            f"- FIRST LINE MUST BE EXACTLY:\\n{self.lock_line()}\\n"
+            "- THEN output ONLY LightCom frames in order A1,A2,A3,A4,A5,A6.\\n"
+            "- NO prose. NO headings. NO code fences. NO extra lines.\\n"
+            "- NO blank lines anywhere in the output.\\n"
+            "- A6 sector labels MUST be only: â¬› ðŸŸ¥ ðŸŸ§\\n"
+            "- If you cannot comply, output ONLY: <LOCK-FAIL>\\n"
             "[/STRUCTURE_LOCK]"
         )
-        return (hardening + "\n" + p), run_hash
 
-    def validate_output(self, output: str, expected_hash: str) -> Tuple[bool, List[str]]:
+        extra = (self._addendum.strip() + "\n") if self._addendum.strip() else ""
+        return hardening + "\n" + extra + base
+
+    def validate_output(self, output: str) -> Tuple[bool, List[str]]:
         errs: List[str] = []
         if not output:
             return False, ["empty_output"]
 
         out = output.replace("\r\n", "\n").replace("\r", "\n")
         lines = out.split("\n")
+
+        # No leading/trailing blank lines
         if not lines or not lines[0].strip():
             return False, ["missing_lock_line"]
         if any((ln == "") for ln in lines):
             errs.append("blank_line_present")
 
-        if lines[0].strip() != self.lock_line(expected_hash):
+        if lines[0].strip() != self.lock_line():
             errs.append("lock_line_mismatch")
 
-        header_re = re.compile(r"^<LCQ\|V=2\.0\|ROLE=(MUT|RTS|FSD|SCN|RSK|REF|AGG|ACK)\|ID=A[0-7]\|")
+        # Collect LC headers and check role ordering
+        header_re = re.compile(r"^<LC\|V=1\.1\|ROLE=(RTS|FSD|SCN|RSK|AUD|AGG)\|ID=A[1-6]\|")
         headers = [ln.strip() for ln in lines if header_re.match(ln.strip())]
         roles = []
         for h in headers:
@@ -4618,646 +4622,45 @@ class LightComPromptGenerator:
             if m:
                 roles.append(m.group(1))
 
-        expected_roles = ["MUT", "RTS", "FSD", "SCN", "RSK", "REF", "AGG", "ACK"]
-        if roles != expected_roles:
+        expected = ["RTS", "FSD", "SCN", "RSK", "AUD", "AGG"]
+        if roles != expected:
             errs.append(f"bad_frame_order_or_count:{roles}")
 
+        # Minimal â€œno proseâ€ check: every non-empty line must be LOCK or LC header or field line
         allowed_re = re.compile(
-            r"^(<LOCK\|.*>|<LOCK-FAIL>|<LCQ\|V=2\.0\|ROLE=.*>|"
-            r"(SEED|MUT|WALL|WBAR|CAL|TXT16|LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|H_EFF|DIST|ROLLBACK|NEWTUNE|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR|NEXT):)"
+            r"^(<LOCK\|.*>|<LOCK-FAIL>|<LC\|V=1\.1\|ROLE=.*>|"
+            r"(LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):)"
         )
         for ln in lines[1:]:
-            s = ln.strip()
-            if s and not allowed_re.match(s):
-                errs.append("unexpected_line:" + s[:80])
+            if ln.strip() and not allowed_re.match(ln.strip()):
+                errs.append("unexpected_line:" + ln.strip()[:80])
                 break
 
-        sector_re = re.compile(r"^(DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):\s*([⬛🟥🟧])$")
+        # Enforce LMH-only sectors
+        sector_re = re.compile(r"^(DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):\s*([â¬›ðŸŸ¥ðŸŸ§])$")
         for ln in lines:
             m = sector_re.match(ln.strip())
-            if m and m.group(2) not in {"⬛", "🟥", "🟧"}:
+            if m is None:
+                continue
+            tok = m.group(2)
+            if tok not in {"â¬›", "ðŸŸ¥", "ðŸŸ§"}:
                 errs.append("non_lmh_sector_token")
 
         return (len(errs) == 0), errs
 
-    def build_repair_prompt(self, expected_hash: str, errors: List[str]) -> str:
+    def build_repair_prompt(self, errors: List[str]) -> str:
         err_txt = ", ".join(errors[:8]) if errors else "unknown"
         return (
-            "REPAIR OUTPUT.\n"
-            f"First line must be exactly:\n{self.lock_line(expected_hash)}\n"
-            "Then ONLY 8 frames in order: MUT,RTS,FSD,SCN,RSK,REF,AGG,ACK.\n"
-            "No blank lines. No prose. No code fences.\n"
-            "A6 sectors only ⬛ 🟥 🟧.\n"
-            f"Errors detected: {err_txt}\n"
+            "REPAIR OUTPUT.\\n"
+            f"First line must be exactly:\\n{self.lock_line()}\\n"
+            "Then ONLY 6 frames in order: RTS, FSD, SCN, RSK, AUD, AGG.\\n"
+            "No blank lines. No prose. No code fences.\\n"
+            "A6 sectors only â¬› ðŸŸ¥ ðŸŸ§.\\n"
+            f"Errors detected: {err_txt}\\n"
             "Return corrected output now."
         )
 
-
-async def run_lightcomq_scan_with_repairs(
-    generator: LightComQPromptGenerator,
-    inp: LightComQInputs,
-    call_llm_fn: Callable[[str], Any],
-    max_attempts: int = 3,
-) -> Optional[str]:
-    """v2.0 runner: rebuild prompt each attempt (seed/strength), validate, then referee-gate."""
-    entropy_min = float(os.getenv("LIGHTCOM_ENTROPY_MIN", "0.42"))
-    entropy_max = float(os.getenv("LIGHTCOM_ENTROPY_MAX", "0.86"))
-    spec_max = float(os.getenv("LIGHTCOM_SPECTRUM_MAX", "0.20"))
-
-    referee = LightComEntropyReferee(
-        entropy_min=entropy_min,
-        entropy_max=entropy_max,
-        spectrum_distance_max=spec_max,
-    )
-
-    seed_base = int(inp.sim_seed) & 0xFFFFFFFF
-    strength = float(inp.mut_strength)
-    wallpaper_hex = str(inp.wallpaper_hex or "000000")
-
-    last_out: Optional[str] = None
-    for attempt in range(max(1, int(max_attempts))):
-        seed = (seed_base + attempt * 9973) & 0xFFFFFFFF
-        tuned = LightComQInputs(**{**inp.__dict__, "sim_seed": int(seed), "mut_strength": float(strength), "wallpaper_hex": wallpaper_hex})
-
-        prompt, expected_hash = generator.build(tuned)
-        out = await call_llm_fn(prompt)
-        last_out = (out or "").strip()
-
-        ok, errs = generator.validate_output(last_out, expected_hash)
-        if not ok:
-            repair = generator.build_repair_prompt(expected_hash, errs)
-            out2 = await call_llm_fn(repair)
-            last_out = (out2 or "").strip()
-            ok2, _errs2 = generator.validate_output(last_out, expected_hash)
-            if not ok2:
-                strength = max(0.08, min(0.92, strength + 0.10))
-                continue
-
-        ref_ok, ref_errs, stats = referee.evaluate(last_out)
-        if ref_ok:
-            return last_out
-
-        strength = referee.tune_strength(strength, stats)
-        if ref_errs == ["color_spectrum_drift"]:
-            seed_base = (seed_base ^ 0xA5A5A5A5) & 0xFFFFFFFF
-
-    return last_out
-
-
-# -----------------------------------------------------------------------------
 async def run_lightcom_scan_with_repairs(
-    generator: LightComPromptGenerator,
-    inp: LightComInputs,
-    call_llm_fn: Callable[[str], Any],
-    max_attempts: int = 3,
-) -> Optional[str]:
-    """
-    Runs the LightCom scan with:
-      - rigid structure lock (generator)
-      - repair retries for formatting drift
-      - entropy+spectrum referee gate (rollback/remutate when out-of-band)
-    """
-    base_prompt = generator.build(inp)
-
-    # Referee thresholds (env-tunable)
-    entropy_min = float(os.getenv("LIGHTCOM_ENTROPY_MIN", "0.42"))
-    entropy_max = float(os.getenv("LIGHTCOM_ENTROPY_MAX", "0.86"))
-    spec_max = float(os.getenv("LIGHTCOM_SPECTRUM_MAX", "0.20"))
-
-    referee = LightComEntropyReferee(
-        entropy_min=entropy_min,
-        entropy_max=entropy_max,
-        spectrum_distance_max=spec_max,
-    )
-
-    # Mutation controls
-    strength = float(os.getenv("LIGHTCOM_MUT_STRENGTH", "0.45"))
-    wallpaper_hex = os.getenv("LIGHTCOM_WALLPAPER_HEX", "000000")
-
-    # Stable-ish seed from inputs (deterministic per run)
-    seed_material = f"{inp.lat0:.6f}|{inp.lon0:.6f}|{inp.destination_mode}|{inp.vehicle_type}|{inp.time_local}"
-    seed_base = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest()[:8], 16)
-
-    last_out: Optional[str] = None
-
-    for attempt in range(max(1, int(max_attempts))):
-        seed = (seed_base + attempt * 9973) & 0xFFFFFFFF
-        prompt = _lightcom_mutate_prompt(base_prompt, seed=seed, strength=strength, wallpaper_hex=wallpaper_hex)
-
-        out = await call_llm_fn(prompt)
-        last_out = (out or "").strip()
-
-        # 1) Structure validation + repair
-        ok, errs = generator.validate_output(last_out)
-        if not ok:
-            # Repair once per attempt (keeps API costs bounded)
-            repair = generator.build_repair_prompt(errs)
-            out2 = await call_llm_fn(repair)
-            last_out = (out2 or "").strip()
-            ok2, errs2 = generator.validate_output(last_out)
-            if not ok2:
-                strength = max(0.08, min(0.92, strength + 0.10))  # nudge diversity if stuck
-                continue
-
-        # 2) Referee gating (entropy band-pass + spectrum drift)
-        ref_ok, ref_errs, stats = referee.evaluate(last_out)
-        if ref_ok:
-            return last_out
-
-        # Rollback + remutate: tune strength and try again
-        strength = referee.tune_strength(strength, stats)
-
-        # If spectrum drift is the only issue, nudge seed more aggressively
-        if ref_errs == ["color_spectrum_drift"]:
-            seed_base = (seed_base ^ 0xA5A5A5A5) & 0xFFFFFFFF
-
-    return last_out
-
-def _lightcom_cosine_distance(a: List[float], b: List[float]) -> float:
-    """Cosine distance in [0,1] (clamped)."""
-    if not a or not b or len(a) != len(b):
-        return 1.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 1.0
-    cosv = max(-1.0, min(1.0, dot / (na * nb)))
-    return max(0.0, min(1.0, 1.0 - cosv))
-
-def _lightcom_palette_spectrum(output_text: str) -> List[float]:
-    """Normalized frequency vector over the HEX16 emoji palette."""
-    counts = [0]*16
-    for ch in output_text:
-        idx = _LIGHTCOM_TOKEN_TO_IDX.get(ch)
-        if idx is not None:
-            counts[idx] += 1
-    total = sum(counts)
-    if total == 0:
-        return [0.0]*16
-    return [c/total for c in counts]
-
-def _lightcom_payload_lines(output_text: str) -> List[str]:
-    """Extract the 'payload' (non-header) lines used for entropy checks."""
-    lines = output_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    payload = []
-    for ln in lines:
-        s = ln.strip()
-        if not s:
-            continue
-        if s.startswith("<LOCK|") or s == "<LOCK-FAIL>":
-            continue
-        if s.startswith("<LC|") or s.startswith("<LCQ|"):
-            continue
-        # Keep only known fields to avoid headers polluting entropy
-        if re.match(r"^(LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|SEED|MUT|WALL|WBAR|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|H_EFF|DIST|ROLLBACK|NEWTUNE|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR|NEXT):", s):
-            payload.append(s)
-    return payload
-
-def _lightcom_entropy_score(output_text: str) -> Dict[str, float]:
-    """
-    Returns entropy-related metrics:
-      - token_entropy_norm: token entropy normalized by log2(V)
-      - char_entropy_norm: character entropy normalized by log2(Vc)
-      - repetition: max token freq / total tokens
-      - entropy_score: combined score in [0,1] (heuristic)
-    """
-    payload = _lightcom_payload_lines(output_text)
-    blob = " ".join(payload)
-
-    # Token entropy (whitespace tokens) — stable and cheap
-    tokens = blob.split()
-    tok_counts: Dict[str, int] = {}
-    for t in tokens:
-        tok_counts[t] = tok_counts.get(t, 0) + 1
-    V = len(tok_counts)
-    Ht = _lightcom_shannon_entropy(tok_counts)
-    Ht_norm = (Ht / math.log2(V)) if V > 1 else 0.0
-
-    # Repetition ratio
-    total_toks = len(tokens)
-    maxp = (max(tok_counts.values()) / total_toks) if total_toks > 0 else 1.0
-
-    # Char entropy on payload blob
-    ch_counts: Dict[str, int] = {}
-    for ch in blob:
-        ch_counts[ch] = ch_counts.get(ch, 0) + 1
-    Vc = len(ch_counts)
-    Hc = _lightcom_shannon_entropy(ch_counts)
-    Hc_norm = (Hc / math.log2(Vc)) if Vc > 1 else 0.0
-
-    # Combined score: penalize extreme repetition; keep within [0,1]
-    score = (0.6 * Ht_norm + 0.4 * Hc_norm) * (1.0 - 0.35 * maxp)
-    score = max(0.0, min(1.0, score))
-
-    return {
-        "token_entropy_norm": float(max(0.0, min(1.0, Ht_norm))),
-        "char_entropy_norm": float(max(0.0, min(1.0, Hc_norm))),
-        "repetition": float(max(0.0, min(1.0, maxp))),
-        "entropy_score": float(score),
-    }
-
-def _lightcom_default_reference_spectrum() -> List[float]:
-    # Uniform by default (safe fallback)
-    return [1.0/16.0]*16
-
-class LightComEntropyReferee:
-    """
-    Referee that gates outputs via:
-      1) Entropy band-pass (too low => 'poisoned' / too repetitive; too high => mutation/gibberish)
-      2) Color-spectrum drift vs golden reference (cosine distance threshold)
-    If failing, caller should rollback and remutate (new seed / adjusted strength).
-    """
-
-    def __init__(
-        self,
-        *,
-        entropy_min: float = 0.42,
-        entropy_max: float = 0.86,
-        spectrum_distance_max: float = 0.20,
-        reference_spectrum: Optional[List[float]] = None,
-    ) -> None:
-        self.entropy_min = float(entropy_min)
-        self.entropy_max = float(entropy_max)
-        self.spectrum_distance_max = float(spectrum_distance_max)
-        self.ref = reference_spectrum[:] if reference_spectrum else _lightcom_default_reference_spectrum()
-
-    def evaluate(self, output_text: str) -> Tuple[bool, List[str], Dict[str, float]]:
-        stats = _lightcom_entropy_score(output_text)
-        spectrum = _lightcom_palette_spectrum(output_text)
-        dist = _lightcom_cosine_distance(spectrum, self.ref)
-        stats["spectrum_distance"] = float(dist)
-
-        errs: List[str] = []
-        if stats["entropy_score"] < self.entropy_min:
-            errs.append("entropy_too_low_possible_poisoning")
-        if stats["entropy_score"] > self.entropy_max:
-            errs.append("entropy_too_high_mutation_overrun")
-        if dist > self.spectrum_distance_max:
-            errs.append("color_spectrum_drift")
-
-        return (len(errs) == 0), errs, stats
-
-    def tune_strength(self, strength: float, stats: Dict[str, float]) -> float:
-        """
-        Heuristic strength tuner:
-          - if entropy too low: increase strength slightly
-          - if entropy too high: decrease strength slightly
-          - if spectrum drift: nudge toward center
-        """
-        s = float(strength)
-        e = float(stats.get("entropy_score", 0.5))
-        d = float(stats.get("spectrum_distance", 0.0))
-
-        if e < self.entropy_min:
-            s += 0.12
-        elif e > self.entropy_max:
-            s -= 0.12
-
-        if d > self.spectrum_distance_max:
-            # Move toward middle — reduce extremes
-            s = 0.55 * s + 0.45 * 0.45
-
-        return max(0.08, min(0.92, s))
-
-# -----------------------------------------------------------------------------
-# LightCom palette constants + on-device decoder (Light-in → English-out)
-# -----------------------------------------------------------------------------
-# IMPORTANT: Keep UTF-8 (no mojibake). These palette tokens are single Unicode
-# codepoints and are used throughout LightCom bars.
-_LIGHTCOM_HEX16_TOKENS: List[str] = [
-    "⬛", "🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫",
-    "⬜", "🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟤",
-]
-_LIGHTCOM_TOKEN_TO_IDX: Dict[str, int] = {tok: i for i, tok in enumerate(_LIGHTCOM_HEX16_TOKENS)}
-_LIGHTCOM_TOKEN_TO_HEX: Dict[str, str] = {tok: format(i, "X") for i, tok in enumerate(_LIGHTCOM_HEX16_TOKENS)}
-
-# Convenience: LMH sector tokens
-_LIGHTCOM_LMH_TOKEN_TO_LABEL: Dict[str, str] = {"⬛": "LOW", "🟥": "MED", "🟧": "HIGH"}
-
-# Debris class mapping (nibble → name)
-_LIGHTCOM_CLS_MAP: Dict[int, str] = {
-    0x0: "unknown",
-    0x1: "organic",
-    0x2: "metallic",
-    0x3: "glass",
-    0x4: "rubber",
-    0x5: "construction",
-    0x6: "liquid/slippery",
-    0x7: "animal",
-}
-
-
-def _lightcom_tokens_to_hex(tokens: List[str]) -> str:
-    """Convert palette tokens to hex string (no validation beyond membership)."""
-    return "".join(_LIGHTCOM_TOKEN_TO_HEX.get(t, "") for t in tokens)
-
-
-def _lightcom_decode_signed_udeg(tokens7: List[str]) -> Optional[int]:
-    """
-    Decode 7-cell signed microdegree delta.
-    Returns signed integer microdegrees, or None if invalid.
-    """
-    if len(tokens7) != 7:
-        return None
-    sign_tok = tokens7[0]
-    if sign_tok not in ("⬛", "🟥"):
-        return None
-    mag_hex = _lightcom_tokens_to_hex(tokens7[1:])
-    if len(mag_hex) != 6:
-        return None
-    try:
-        mag = int(mag_hex, 16)
-    except Exception:
-        return None
-    sgn = 1 if sign_tok == "⬛" else -1
-    return sgn * int(mag)
-
-
-def _lightcom_decode_byte(tokens2: List[str]) -> Optional[int]:
-    """Decode 2-cell byte from hex palette tokens."""
-    if len(tokens2) != 2:
-        return None
-    hx = _lightcom_tokens_to_hex(tokens2)
-    if len(hx) != 2:
-        return None
-    try:
-        return int(hx, 16)
-    except Exception:
-        return None
-
-
-def _lightcom_decode_text16(tokens: List[str]) -> Optional[str]:
-    """
-    Decode a TXT16 payload (hex nibbles encoded as palette tokens) back to UTF-8 text.
-    Returns None on failure.
-    """
-    hx = _lightcom_tokens_to_hex(tokens)
-    if len(hx) < 2 or (len(hx) % 2) != 0:
-        return None
-    try:
-        b = bytes.fromhex(hx)
-        return b.decode("utf-8", errors="strict")
-    except Exception:
-        return None
-
-
-def _lightcom_encode_text16(text: str) -> str:
-    """Encode UTF-8 text into palette tokens (hex-nibble mapping)."""
-    hx = text.encode("utf-8").hex().upper()
-    return " ".join(_LIGHTCOM_HEX16_TOKENS[int(ch, 16)] for ch in hx)
-
-
-class LightComLegend:
-    """
-    Local, on-device legend store: pattern (palette token string) → English text.
-    Used for optional calibration pulses and short hidden messages.
-    """
-    def __init__(self, mapping: Optional[Dict[str, str]] = None) -> None:
-        self.mapping: Dict[str, str] = dict(mapping or {})
-
-    @staticmethod
-    def load(path: str) -> "LightComLegend":
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                # ensure str:str
-                clean = {str(k): str(v) for k, v in data.items()}
-                return LightComLegend(clean)
-        except Exception:
-            pass
-        return LightComLegend({})
-
-    def save(self, path: str) -> None:
-        tmp = path + ".tmp"
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.mapping, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-
-    def put(self, pattern: str, text: str) -> None:
-        self.mapping[str(pattern).strip()] = str(text)
-
-    def get(self, pattern: str) -> Optional[str]:
-        return self.mapping.get(str(pattern).strip())
-
-
-def _lightcom_make_calibration_bar(seed: int, *, length: int = 24) -> str:
-    """
-    Deterministic 'calibration pulse' bar: a sequence of palette tokens.
-    This can be treated as an opaque handle that only the local decoder can translate.
-    """
-    rng = random.Random(int(seed) & 0xFFFFFFFF)
-    toks = [_LIGHTCOM_HEX16_TOKENS[rng.randrange(0, 16)] for _ in range(max(8, int(length)))]
-    return " ".join(toks)
-
-
-def lightcom_decode_to_english(output_text: str, *, legend: Optional[LightComLegend] = None) -> str:
-    """
-    Light-in → English-out decoder.
-    - Parses LC/LCQ frames.
-    - Decodes GeoRuler LAT/LON bars to active GPS.
-    - Decodes byte fields (SEV/PRC/CNF) to 0..1 floats.
-    - Maps CLS to class names.
-    - Optionally resolves CAL pulses and TXT16 messages via a local legend.
-    """
-    legend = legend or LightComLegend({})
-
-    out = (output_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not out:
-        return ""
-
-    # Extract origin from first header we can find (LCQ preferred)
-    lat0 = lon0 = None
-    m = re.search(r"^<LCQ\|V=.*?\|.*?ORIG=([\-0-9.]+),([\-0-9.]+)\|", out, flags=re.M)
-    if not m:
-        m = re.search(r"^<LC\|V=.*?\|.*?ORIG=([\-0-9.]+),([\-0-9.]+)\|", out, flags=re.M)
-    if m:
-        try:
-            lat0 = float(m.group(1))
-            lon0 = float(m.group(2))
-        except Exception:
-            lat0 = lon0 = None
-
-    lines = out.split("\n")
-
-    # Frame parsing
-    frames: List[Dict[str, Any]] = []
-    cur: Optional[Dict[str, Any]] = None
-
-    def _push():
-        nonlocal cur
-        if cur is not None:
-            frames.append(cur)
-        cur = None
-
-    header_lcq = re.compile(r"^<LCQ\|V=.*?\|ROLE=([A-Z]{3})\|ID=(A[0-7])\|")
-    header_lc  = re.compile(r"^<LC\|V=.*?\|ROLE=([A-Z_]+)\|ID=(A[1-6])\|")
-
-    for ln in lines:
-        s = ln.strip()
-        if not s:
-            continue
-        if s.startswith("<LOCK|") or s == "<LOCK-FAIL>":
-            continue
-        m1 = header_lcq.match(s)
-        m2 = header_lc.match(s)
-        if m1:
-            _push()
-            cur = {"role": m1.group(1), "id": m1.group(2), "header": s, "kv": {}}
-            continue
-        if m2:
-            _push()
-            cur = {"role": m2.group(1), "id": m2.group(2), "header": s, "kv": {}}
-            continue
-        if cur is None:
-            continue
-        # key:value lines
-        if ":" in s:
-            k, v = s.split(":", 1)
-            cur["kv"][k.strip()] = v.strip()
-
-    _push()
-
-    debris_rows: List[str] = []
-    sector_rows: List[str] = []
-    cal_rows: List[str] = []
-    txt_rows: List[str] = []
-
-    # Decode calibration pulses (if present)
-    for fr in frames:
-        kv = fr.get("kv", {})
-        if "CAL" in kv:
-            pat = kv["CAL"]
-            meaning = legend.get(pat) or "<unmapped>"
-            cal_rows.append(f"Calibration pulse: {meaning}")
-
-        if "TXT16" in kv:
-            toks = kv["TXT16"].split()
-            msg = _lightcom_decode_text16(toks)
-            if msg:
-                txt_rows.append(msg)
-
-    # Decode debris objects (SCN/RSK frames)
-    for fr in frames:
-        role = fr.get("role")
-        if role not in ("SCN", "RSK"):
-            continue
-        kv = fr.get("kv", {})
-        lat_bar = kv.get("LAT", "")
-        lon_bar = kv.get("LON", "")
-        lat_tokens = lat_bar.split()
-        lon_tokens = lon_bar.split()
-
-        dlat_u = _lightcom_decode_signed_udeg(lat_tokens) if lat_tokens else None
-        dlon_u = _lightcom_decode_signed_udeg(lon_tokens) if lon_tokens else None
-
-        gps_lat = gps_lon = None
-        if lat0 is not None and lon0 is not None and dlat_u is not None and dlon_u is not None:
-            gps_lat = lat0 + (dlat_u * 1e-6)
-            gps_lon = lon0 + (dlon_u * 1e-6)
-
-        # Scalars
-        sev = prc = cnf = None
-        if "SEV" in kv:
-            b = _lightcom_decode_byte(kv["SEV"].split())
-            if b is not None:
-                sev = b / 255.0
-        if "PRC" in kv:
-            b = _lightcom_decode_byte(kv["PRC"].split())
-            if b is not None:
-                prc = b / 255.0
-        if "CNF" in kv:
-            b = _lightcom_decode_byte(kv["CNF"].split())
-            if b is not None:
-                cnf = b / 255.0
-
-        cls = "unknown"
-        if "CLS" in kv:
-            tok = kv["CLS"].strip()
-            hx = _LIGHTCOM_TOKEN_TO_HEX.get(tok)
-            if hx:
-                try:
-                    cls = _LIGHTCOM_CLS_MAP.get(int(hx, 16), "unknown")
-                except Exception:
-                    cls = "unknown"
-
-        if gps_lat is not None and gps_lon is not None:
-            debris_rows.append(
-                f"{fr['id']}/{role}: {cls} at ({gps_lat:.6f}, {gps_lon:.6f})"
-                + (f" sev={sev:.2f}" if sev is not None else "")
-                + (f" prc={prc:.2f}" if prc is not None else "")
-                + (f" cnf={cnf:.2f}" if cnf is not None else "")
-            )
-
-    # Decode sectors (AGG frame)
-    for fr in frames:
-        if fr.get("role") != "AGG":
-            continue
-        kv = fr.get("kv", {})
-        for k in ("DEBRIS", "TRAFFC", "COLLIS", "PEDSTR", "WEATHR"):
-            if k in kv:
-                tok = kv[k].strip()
-                sector_rows.append(f"{k}: {_LIGHTCOM_LMH_TOKEN_TO_LABEL.get(tok, 'UNKNOWN')}")
-
-    parts: List[str] = []
-    if cal_rows:
-        parts.append("CALIBRATION")
-        parts.extend(cal_rows)
-        parts.append("")
-    if txt_rows:
-        parts.append("MESSAGES")
-        parts.extend(txt_rows)
-        parts.append("")
-    parts.append("DEBRIS (decoded)")
-    parts.extend(debris_rows if debris_rows else ["none"])
-    parts.append("")
-    parts.append("SECTORS")
-    parts.extend(sector_rows if sector_rows else ["none"])
-
-    return "\n".join(parts).strip()
-
-def _lightcom_hex_to_palette_bar(hex_str: str) -> str:
-    """
-    Convert a hex string (e.g. 'A1B2C3') into a palette bar of emoji tokens.
-    Non-hex chars are ignored. Output is space-separated tokens.
-    """
-    hex_str = re.sub(r"[^0-9a-fA-F]", "", hex_str)
-    out: List[str] = []
-    for ch in hex_str.upper():
-        idx = int(ch, 16)
-        out.append(_LIGHTCOM_HEX16_TOKENS[idx])
-    return " ".join(out)
-
-def _lightcom_mutate_prompt(base_prompt: str, *, seed: int, strength: float, wallpaper_hex: str = "000000") -> str:
-    """
-    Adds a mutation pad BEFORE the locked prompt, without altering the master template.
-    This changes model sampling behavior while preserving the rigid output contract.
-    """
-    rng = random.Random(int(seed) & 0xFFFFFFFF)
-    # Noise words are harmless "texture" that influences generations slightly
-    noise_vocab = [
-        "spectral", "lattice", "corridor", "delta", "kalman", "vector", "proxy",
-        "centroid", "merge", "curvature", "lookahead", "microdeg", "stability",
-        "roll-back", "remutate", "referee", "checksum", "bandpass", "guardrail",
-    ]
-    noise_len = int(8 + 18 * float(strength))
-    noise = " ".join(rng.choice(noise_vocab) for _ in range(noise_len))
-
-    pad = (
-        "[MUTATOR_PAD]\\n"
-        f"SIM_SEED: {seed}\\n"
-        f"MUT_STRENGTH: {strength:.2f}\\n"
-        f"WALLPAPER_HEX: {wallpaper_hex}\\n"
-        f"WALLPAPER_BAR: {_lightcom_hex_to_palette_bar(wallpaper_hex)}\\n"
-        f"NOISE: {noise}\\n"
-        "[/MUTATOR_PAD]"
-    )
-
-    return pad + "\\n\\n" + base_prompt
-
-async def _legacy_run_lightcom_scan_with_repairs(
     generator: LightComPromptGenerator,
     inp: LightComInputs,
     call_llm_fn: Callable[[str], Any],
@@ -7146,61 +6549,23 @@ async def scan_debris_for_route(
     origin_address = street_name if street_name != "Unknown Location" else f"{lat:.6f},{lon:.6f}"
     destination_mode = destination
 
-
-    protocol = (os.getenv("LIGHTCOM_PROTOCOL", "v2") or "v2").strip().lower()
-
-    if protocol in ("v2", "v2.0", "lcq", "lightcomq"):
-        sim_seed_material = f"{lat:.6f}|{lon:.6f}|{destination_mode}|{vehicle_type}|{time_local}"
-        sim_seed = int(hashlib.sha256(sim_seed_material.encode("utf-8")).hexdigest()[:8], 16)
-        # Local calibration legend (on-device): rainbow pulse → English phrase
-        legend_path = os.getenv(
-            "LIGHTCOM_LEGEND_PATH",
-            os.path.join(os.path.expanduser("~"), ".lightcom_legend.json"),
-        )
-        try:
-            legend = LightComLegend.load(legend_path)
-            cal_bar = _lightcom_make_calibration_bar(int(sim_seed), length=24)
-            cal_sentence = os.getenv("LIGHTCOM_CAL_SENTENCE", "CALIBRATION_OK")
-            legend.put(cal_bar, cal_sentence)
-            legend.save(legend_path)
-        except Exception:
-            legend = LightComLegend({})
-
-        lightcom_inp_q = LightComQInputs(
-            origin_address=origin_address,
-            destination_mode=destination_mode,
-            lat0=float(lat),
-            lon0=float(lon),
-            vehicle_type=str(vehicle_type),
-            time_local=str(time_local),
-            w_m=int(w_m),
-            fwd_m=int(fwd_m),
-            quantum_results=str(quantum_results),
-            cpu_usage=float(cpu_usage),
-            ram_usage=float(ram_usage),
-            sim_seed=int(sim_seed),
-            mut_strength=float(os.getenv("LIGHTCOM_MUT_STRENGTH", "0.45") or 0.45),
-            wallpaper_hex=str(os.getenv("LIGHTCOM_WALLPAPER_HEX", "000000") or "000000"),
-        )
-        lightcom_gen_q = LightComQPromptGenerator(LIGHTCOM_Q_MASTER_PROMPT_V20)
-    else:
-        lightcom_inp = LightComInputs(
-            origin_address=origin_address,
-            destination_mode=destination_mode,
-            lat0=float(lat),
-            lon0=float(lon),
-            vehicle_type=str(vehicle_type),
-            time_local=str(time_local),
-            w_m=int(w_m),
-            fwd_m=int(fwd_m),
-            quantum_results=str(quantum_results),
-            cpu_usage=float(cpu_usage),
-            ram_usage=float(ram_usage),
-        )
-        lightcom_gen = LightComPromptGenerator(
-            LIGHTCOM_MASTER_PROMPT_V11,
-            addendum=LIGHTCOM_COORDS_ADDENDUM,
-        )
+    lightcom_inp = LightComInputs(
+        origin_address=origin_address,
+        destination_mode=destination_mode,
+        lat0=float(lat),
+        lon0=float(lon),
+        vehicle_type=str(vehicle_type),
+        time_local=str(time_local),
+        w_m=int(w_m),
+        fwd_m=int(fwd_m),
+        quantum_results=str(quantum_results),
+        cpu_usage=float(cpu_usage),
+        ram_usage=float(ram_usage),
+    )
+    lightcom_gen = LightComPromptGenerator(
+        LIGHTCOM_MASTER_PROMPT_V11,
+        addendum=LIGHTCOM_COORDS_ADDENDUM,
+    )
 
     async def _call_openai(p: str) -> Optional[str]:
         return await run_openai_response_text(
@@ -7220,7 +6585,6 @@ async def scan_debris_for_route(
     if selected not in ("openai", "grok", "llama_local"):
         selected = "openai"
 
-
     report: str = ""
     if selected == "llama_local" and llama_local_ready():
         # Local llama returns one word: Low/Medium/High
@@ -7238,75 +6602,39 @@ async def scan_debris_for_route(
         report = label if label else "Medium"
         model_used = "llama_local"
     elif selected == "grok" and os.getenv("GROK_API_KEY"):
-        if protocol in ("v2", "v2.0", "lcq", "lightcomq"):
-            raw_report = await run_lightcomq_scan_with_repairs(
-                lightcom_gen_q,
-                lightcom_inp_q,
-                call_llm_fn=_call_grok,
-                max_attempts=int(os.getenv("LIGHTCOM_REPAIR_ATTEMPTS", "3") or 3),
-            )
-        else:
-            raw_report = await run_lightcom_scan_with_repairs(
-                lightcom_gen,
-                lightcom_inp,
-                call_llm_fn=_call_grok,
-                max_attempts=int(os.getenv("LIGHTCOM_REPAIR_ATTEMPTS", "3") or 3),
-            )
+        raw_report = await run_lightcom_scan_with_repairs(
+            lightcom_gen,
+            lightcom_inp,
+            call_llm_fn=_call_grok,
+            max_attempts=int(os.getenv("LIGHTCOM_REPAIR_ATTEMPTS", "3") or 3),
+        )
         report = raw_report if raw_report is not None else ""
         model_used = "grok"
     else:
-        # OpenAI (GPT-5.2) preferred when configured; otherwise fall back to Grok; otherwise offline neutral.
-        if protocol in ("v2", "v2.0", "lcq", "lightcomq"):
-            raw_report = await run_lightcomq_scan_with_repairs(
-                lightcom_gen_q,
-                lightcom_inp_q,
-                call_llm_fn=_call_openai,
-                max_attempts=int(os.getenv("LIGHTCOM_REPAIR_ATTEMPTS", "3") or 3),
-            )
-        else:
-            raw_report = await run_lightcom_scan_with_repairs(
-                lightcom_gen,
-                lightcom_inp,
-                call_llm_fn=_call_openai,
-                max_attempts=int(os.getenv("LIGHTCOM_REPAIR_ATTEMPTS", "3") or 3),
-            )
-
+        # OpenAI (GPT-5.2 Thinking) preferred; validate/repair for rigid structure.
+        raw_report = await run_lightcom_scan_with_repairs(
+            lightcom_gen,
+            lightcom_inp,
+            call_llm_fn=_call_openai,
+            max_attempts=int(os.getenv("LIGHTCOM_REPAIR_ATTEMPTS", "3") or 3),
+        )
         if raw_report:
             report = raw_report
             model_used = "openai"
         elif os.getenv("GROK_API_KEY"):
-            if protocol in ("v2", "v2.0", "lcq", "lightcomq"):
-                raw_report2 = await run_lightcomq_scan_with_repairs(
-                    lightcom_gen_q,
-                    lightcom_inp_q,
-                    call_llm_fn=_call_grok,
-                    max_attempts=2,
-                )
-            else:
-                raw_report2 = await run_lightcom_scan_with_repairs(
-                    lightcom_gen,
-                    lightcom_inp,
-                    call_llm_fn=_call_grok,
-                    max_attempts=2,
-                )
+            raw_report2 = await run_lightcom_scan_with_repairs(
+                lightcom_gen,
+                lightcom_inp,
+                call_llm_fn=_call_grok,
+                max_attempts=2,
+            )
             report = raw_report2 if raw_report2 is not None else ""
             model_used = "grok"
         else:
             report = "Low"
             model_used = "offline"
+
     report = (report or "").strip()
-    # Optional: decode LightCom/LightCom-Q frames into English locally (Light-in → English-out)
-    if (os.getenv("LIGHTCOM_DECODE_ENGLISH", "0") or "0").strip() == "1":
-        try:
-            legend_path = os.getenv(
-                "LIGHTCOM_LEGEND_PATH",
-                os.path.join(os.path.expanduser("~"), ".lightcom_legend.json"),
-            )
-            legend = LightComLegend.load(legend_path)
-            report = lightcom_decode_to_english(report, legend=legend)
-        except Exception:
-            # If decoder fails, keep raw frames
-            pass
 
     harm_level = calculate_harm_level(report)
 
