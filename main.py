@@ -1307,7 +1307,13 @@ class ReportForm(FlaskForm):
                             validators=[DataRequired()])
     submit = SubmitField("Submit Report")
 
+             
 
+@app.route('/')
+def index():
+    return redirect(url_for('home'))
+
+@app.route('/home')
 def home():
     return render_template_string("""
 <!DOCTYPE html>
@@ -2721,3 +2727,7 @@ def reverse_geocode_route():
 
 if __name__ == '__main__':
     serve(app, host='0.0.0.0', port=3000, threads=4)
+
+            
+                                                        
+                
