@@ -25,13 +25,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
-
 import bleach
 import geonamescache
 import numpy as np
 import psutil
 from markdown2 import markdown
-
 from flask import (
     Flask,
     Response,
@@ -51,14 +49,11 @@ from flask_wtf import CSRFProtect, FlaskForm
 from flask_wtf.csrf import generate_csrf, validate_csrf
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
 from werkzeug.middleware.proxy_fix import ProxyFix
-
 from wtforms import PasswordField, SelectField, StringField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, Length, ValidationError
-
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type, hash_secret_raw
-
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
@@ -66,39 +61,32 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA3_512
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-
 from numpy.random import Generator, PCG64DXSM
-
 try:
     import pennylane as qml
     from pennylane import numpy as pnp
 except Exception:
     qml = None
     pnp = None
-
 try:
     import zstandard as zstd
     _HAS_ZSTD = True
 except Exception:
     zstd = None
     _HAS_ZSTD = False
-
 try:
     from typing import TypedDict
 except ImportError:
     from typing_extensions import TypedDict
-
 try:
     import oqs as _oqs
     oqs = cast(Any, _oqs)
 except Exception:
     oqs = cast(Any, None)
-
 try:
     import fcntl
 except Exception:
     fcntl = None
-
 import zlib as _zlib
 
 
