@@ -4048,10 +4048,10 @@ def _openai_extract_output_text(data: dict) -> str:
 async def run_openai_response_text(
     prompt: str,
     model: Optional[str] = None,
-    max_output_tokens: int = 1200,
+    max_output_tokens: int = 300,
     temperature: float = 0.7,
     reasoning_effort: str = "none",
-    max_retries: int = 6,
+    max_retries: int = 3,
     base_delay: float = 0.8,
     max_delay: float = 10.0,
     jitter_factor: float = 0.6,
@@ -4090,7 +4090,7 @@ async def run_openai_response_text(
                 r = await client.post(
                     "/responses",
                     json=payload,
-                    timeout=httpx.Timeout(connect=12.0, read=150.0, write=30.0, pool=20.0),
+                    timeout=httpx.Timeout(connect=12.0, read=10.0, write=15.0, pool=20.0),
                 )
 
                 if r.status_code == 200:
@@ -4153,7 +4153,7 @@ LIGHTCOM_MASTER_PROMPT_V11 = r'''
 [INPUTS]
 origin={ORIGIN_ADDRESS}  dest={DESTINATION_MODE}
 gps=({LAT0},{LON0})  veh={VEHICLE_TYPE}
-time={TIME_LOCAL}  w={W_M}m  fwd={FWD_M}m
+
 quantum={QUANTUM_RESULTS}  cpu={CPU_USAGE}% ram={RAM_USAGE}%
 
 [PALETTE] 0⬛ 1🟥 2🟧 3🟨 4🟩 5🟦 6🟪 7🟫 8⬜ 9🔴 A🟠 B🟡 C🟢 D🔵 E🟣 F🟤
@@ -4162,10 +4162,6 @@ quantum={QUANTUM_RESULTS}  cpu={CPU_USAGE}% ram={RAM_USAGE}%
 LAT/LON: 7 cells (sign ⬛/🟥 + 6 nibbles, μdeg)
 Scalars: 2 cells (0–255), LMH: ⬛🟥🟧 only
 CLS: 1 nibble (0=unk,1=organic,2=metal,...)
-
-[SHOW-STOPPER POLICY]
-HIGH only if: severe debris (≥0.5m, sharp, in-lane), certain collision, full blockage,
-dense pedestrians + poor vis, or weather control-limiting.
 
 [OUTPUT ORDER]
 1) A1 RouteSynth   2) A2 FieldSim   3) A3 DebrisLocator
@@ -4206,11 +4202,6 @@ WEATHR: HIGH if ice/fog/storm; MED if moderate; LOW if benign.
 Generate frames per agent:
 A1 realistic route, A2 sim weather, A3 0–4 debris (in-path),
 A4 adjust risk by vehicle, A5 validate (PASS/FAIL), A6 aggregate LMH.
-
-[FINAL RULE]
-Output ONLY frames A1–A6, in order, no explanations.
-###############################################################################
-
 
 
 '''
@@ -4315,10 +4306,7 @@ class LightComPromptGenerator:
         hardening = (
             "[STRUCTURE_LOCK]\\n"
             f"- FIRST LINE MUST BE EXACTLY:\\n{self.lock_line()}\\n"
-            "- THEN output frames in order: RTS (A1) once, FSD (A2) once, SCN (A3) 1..N, RSK (A4) 1..N, AUD (A5) 1..N, AGG (A6) once (last).\\n"
-            "- NO prose. NO headings. NO code fences. NO extra lines.\\n"
-            "- NO blank lines anywhere in the output.\\n"
-            "- A6 sector labels MUST be only:YOU MUST SIMULATE ANS TRIPLE CHECK OUTPUT EXCELLING ACCURATE ⬛ 🟧 🟥\\n"
+        
             "[/STRUCTURE_LOCK]"
         )
 
