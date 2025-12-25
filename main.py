@@ -1025,7 +1025,7 @@ async def run_grok_completion(prompt):
                     "temperature": 0
                 }
 
-                response = await client.post("https://api.x.ai/v1/chat/completions", json=data, headers=headers)
+                response = await client.post("https://api.x.ai/v1/responses", json=data, headers=headers)
                 response.raise_for_status()
                 result = response.json()
                 clean_content = result.get("choices", [{}])[0].get("content", "").strip()
