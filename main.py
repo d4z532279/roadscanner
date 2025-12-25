@@ -1011,8 +1011,7 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
     qml.CNOT(wires=[3, 4])
     return qml.probs(wires=[0, 1, 2, 3, 4])
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-pro')
+
 
 async def phf_filter_input(input_text):
     logger.debug("Entering phf_filter_input with input_text of length %d", len(input_text) if input_text else 0)
@@ -1352,7 +1351,7 @@ async def run_openai_completion(prompt):
                     "Authorization": f"Bearer {openai_api_key}"
                 }
                 data = {
-                    "model": "gpt-4o",
+                    "model": "gpt-3.5-turbo",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.7
                 }
