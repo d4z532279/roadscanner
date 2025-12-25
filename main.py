@@ -4122,12 +4122,12 @@ async def run_openai_response_text(
     if client is None:
         return None
 
-    model = model or os.getenv("OPENAI_MODEL", "gpt-5.2-thinking")
+    model = model or os.getenv("OPENAI_MODEL", "gpt-5.2")
 
     # Some deployments/accounts may not have access to *Thinking* variants.
     # We will fall back gracefully if the API returns model_not_found.
     requested_model = model
-    fallback_env = os.getenv("OPENAI_MODEL_FALLBACKS", "gpt-5.2,gpt-5.2-instant")
+    fallback_env = os.getenv("OPENAI_MODEL_FALLBACKS", "gpt-5.2")
     fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
     models_to_try = [requested_model] + [m for m in fallback_models if m != requested_model]
     model_idx = 0
