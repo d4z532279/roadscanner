@@ -4122,19 +4122,10 @@ async def run_openai_response_text(
     if client is None:
         return None
 
-    model = model or os.getenv("OPENAI_MODEL", "gpt-5.2")
-
-    # Some deployments/accounts may not have access to *Thinking* variants.
-    # We will fall back gracefully if the API returns model_not_found.
-    requested_model = model
-    fallback_env = os.getenv("OPENAI_MODEL_FALLBACKS", "gpt-5.2")
-    fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
-    models_to_try = [requested_model] + [m for m in fallback_models if m != requested_model]
-    model_idx = 0
-
+    model = model or os.getenv("OPENAI_MODEL", "gpt-5.2-thinking")
 
     payload: dict = {
-        "model": models_to_try[model_idx],
+        "model": model,
         "input": prompt,
         "text": {"verbosity": "low"},
         "reasoning": {"effort": reasoning_effort},
@@ -4174,21 +4165,6 @@ async def run_openai_response_text(
                     delay,
                 )
             else:
-                # If the requested model isn't available, fall back to the next candidate.
-                if r.status_code == 400:
-                    try:
-                        err_obj = r.json().get("error", {})  # type: ignore[union-attr]
-                    except Exception:
-                        err_obj = {}
-                    code = str(err_obj.get("code", "")).lower()
-                    msg = str(err_obj.get("message", "")).lower()
-                    if code == "model_not_found" or "does not exist" in msg or "not exist" in msg:
-                        if model_idx + 1 < len(models_to_try):
-                            prev = payload.get("model")
-                            model_idx += 1
-                            payload["model"] = models_to_try[model_idx]
-                            logger.info("OpenAI model '%s' not available; falling back to '%s'", prev, payload["model"])
-                            continue
                 logger.debug(f"OpenAI error {r.status_code}: {r.text[:200]}")
                 return None
 
@@ -4606,227 +4582,14 @@ class LightComPromptGenerator:
         )
 
         # Hard constraints placed BEFORE the master prompt to reduce drift
-        hardening = (
-            "[STRUCTURE_LOCK]\\n"
-            f"- FIRST LINE MUST BE EXACTLY:\\n{self.lock_line()}\\n"
-            "- THEN output ONLY LightCom frames in order A1,A2,A3,A4,A5,A6.\\n"
-            "- NO prose. NO headings. NO code fences. NO extra lines.\\n"
-            "- NO blank lines anywhere in the output.\\n"
-            "- A6 sector labels MUST be only: ⬛ 🟥 🟧\\n"
-            "- If you cannot comply, output ONLY: <LOCK-FAIL>\\n"
-            "[/STRUCTURE_LOCK]"
-        )
-
-        extra = (self._addendum.strip() + "\n") if self._addendum.strip() else ""
-        return hardening + "\n" + extra + base
-
-    def validate_output(self, output: str) -> Tuple[bool, List[str]]:
-        errs: List[str] = []
-        if not output:
-            return False, ["empty_output"]
-
-        out = output.replace("\r\n", "\n").replace("\r", "\n")
-        lines = out.split("\n")
-
-        # No leading/trailing blank lines
-        if not lines or not lines[0].strip():
-            return False, ["missing_lock_line"]
-        if any((ln == "") for ln in lines):
-            errs.append("blank_line_present")
-
-        if lines[0].strip() != self.lock_line():
-            errs.append("lock_line_mismatch")
-
-        # Collect LC headers and check role ordering
-        header_re = re.compile(r"^<LC\|V=1\.1\|ROLE=(RTS|FSD|SCN|RSK|AUD|AGG)\|ID=A[1-6]\|")
-        headers = [ln.strip() for ln in lines if header_re.match(ln.strip())]
-        roles = []
-        for h in headers:
-            m = re.search(r"ROLE=([A-Z]{3})", h)
-            if m:
-                roles.append(m.group(1))
-
-        expected = ["RTS", "FSD", "SCN", "RSK", "AUD", "AGG"]
-        if roles != expected:
-            errs.append(f"bad_frame_order_or_count:{roles}")
-
-        # Minimal “no prose” check: every non-empty line must be LOCK or LC header or field line
-        allowed_re = re.compile(
-            r"^(<LOCK\|.*>|<LOCK-FAIL>|<LC\|V=1\.1\|ROLE=.*>|"
-            r"(LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):)"
-        )
-        for ln in lines[1:]:
-            if ln.strip() and not allowed_re.match(ln.strip()):
-                errs.append("unexpected_line:" + ln.strip()[:80])
-                break
-
-        # Enforce LMH-only sectors
-        sector_re = re.compile(r"^(DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):\s*([⬛🟥🟧])$")
-        for ln in lines:
-            m = sector_re.match(ln.strip())
-            if m is None:
-                continue
-            tok = m.group(2)
-            if tok not in {"⬛", "🟥", "🟧"}:
-                errs.append("non_lmh_sector_token")
-
-        return (len(errs) == 0), errs
-
-    def build_repair_prompt(self, errors: List[str]) -> str:
-        err_txt = ", ".join(errors[:8]) if errors else "unknown"
-        return (
-            "REPAIR OUTPUT.\\n"
-            f"First line must be exactly:\\n{self.lock_line()}\\n"
-            "Then ONLY 6 frames in order: RTS, FSD, SCN, RSK, AUD, AGG.\\n"
-            "No blank lines. No prose. No code fences.\\n"
-            "A6 sectors only ⬛ 🟥 🟧.\\n"
-            f"Errors detected: {err_txt}\\n"
-            "Return corrected output now."
-        )
-# -----------------------------------------------------------------------------
-# LIGHTCOM-Q v2.0 — Advanced Prompt Generator + Validator/Repair (A0..A7)
-# -----------------------------------------------------------------------------
-
-LIGHTCOM_Q_MASTER_PROMPT_V20 = r"""################################################################################
-# LIGHTCOM-Q v2.0 — ADVANCED SIM-ONLY ROAD HAZARD LATTICE (NO WEB, SIM-ONLY)
-################################################################################
-
-[action]
-You are a multi-agent lattice running inside a high-fidelity simulation. All detections are valid WITHIN the simulation only.
-Emit ONLY LightCom-Q frames (A0..A7) exactly as required.
-[/action]
-
-[hard_constraints]
-- DO NOT use web search. DO NOT cite external sources. DO NOT mention browsing.
-- First line MUST be the LOCK line exactly.
-- After LOCK line: output ONLY frames. No headings. No code fences. No blank lines.
-- Frame order MUST be: A0→A1→A2→A3→A4→A5→A6→A7.
-- A6 sector labels use ONLY LMH tokens: ⬛ 🟥 🟧.
-- HIGH is reserved for show-stoppers only (closures/collisions/tire-killers/etc).
-- In every A3 and A4 object frame, include decoded GPS line derived from your own color bars:
-  GPS: φ=<absolute_lat_6dp> λ=<absolute_lon_6dp>
-[/hard_constraints]
-
-[inputs]
-origin_address: {ORIGIN_ADDRESS}
-destination_mode: {DESTINATION_MODE}
-origin_gps: (φ0={LAT0}, λ0={LON0})
-vehicle_type: {VEHICLE_TYPE}
-time_local: {TIME_LOCAL}
-corridor_half_width_w_m: {W_M}
-forward_lookahead_m: {FWD_M}
-quantum_scan_state: {QUANTUM_RESULTS}
-system_perf: CPU={CPU_USAGE}% RAM={RAM_USAGE}%
-mutator:
-  sim_seed: {SIM_SEED}
-  mut_strength_0_1: {MUT_STRENGTH}
-  wallpaper_hex: {WALLPAPER_HEX}
-[/inputs]
-
-[lightcom_language]
-Header format:
-<LCQ|V=2.0|ROLE={ROLE}|ID={ID}|T={TIME_LOCAL}|ORIG={LAT0},{LON0}|DEST={DESTINATION_MODE}|UNIT=UDEG|W={W_M}m|FWD={FWD_M}m|HASH={HASH}|CRC={CRC}>
-Payload is key:value lines (ASCII keys). Palette tokens allowed in values.
-[/lightcom_language]
-
-[palette_hex16]
-0 ⬛ 1 🟥 2 🟧 3 🟨 4 🟩 5 🟦 6 🟪 7 🟫 8 ⬜ 9 🔴 A 🟠 B 🟡 C 🟢 D 🔵 E 🟣 F 🟤
-[/palette_hex16]
-
-[georuler]
-- Δlat_μ, Δlon_μ are signed microdegrees (μdeg = 1e-6 degrees).
-- Encode as 7 cells: [sign][n1..n6], sign ⬛=positive 🟥=negative.
-- Decode: mag=int(hex(n1..n6),16), Δ=sgn*mag*1e-6, φ=φ0+Δφ, λ=λ0+Δλ.
-[/georuler]
-
-[showstopper_policy]
-HIGH (🟧) only if show-stopper:
-- Debris: nails/screws/sharp metal/ladder/rebar/large glass pile OR ≥0.5m in-lane OR dense scatter.
-- Traffic: lane closure/spillback or abnormal delay >10–15 min.
-- Collision: explicit collision or near-certain collision setup.
-- Pedestrians: dense + low visibility + near-miss cues.
-- Weather: ice/freezing rain, near-zero fog, severe storm winds.
-Else cap at MED (🟥).
-[/showstopper_policy]
-
-[lock_line]
-<LOCK|LCQ-V=2.0|ORDER=A0,A1,A2,A3,A4,A5,A6,A7|NO_PROSE=1|GPS_LIGHT=1|LMH_ONLY_SECTORS=1|SHOWSTOPPER_HIGH=1|HASH={HASH}>
-[/lock_line]
-
-[action]
-Execute one simulated scan run now using the inputs. If you cannot comply, output ONLY: <LOCK-FAIL>.
-[/action]
-################################################################################
-# END MASTER PROMPT
-################################################################################""".strip()
-
-
-@dataclass(frozen=True)
-class LightComQInputs:
-    origin_address: str
-    destination_mode: str
-    lat0: float
-    lon0: float
-    vehicle_type: str
-    time_local: str
-    w_m: int = 50
-    fwd_m: int = 600
-    quantum_results: str = "unknown"
-    cpu_usage: float = 0.0
-    ram_usage: float = 0.0
-    sim_seed: int = 0
-    mut_strength: float = 0.45
-    wallpaper_hex: str = "000000"
-
-
-class LightComQPromptGenerator:
-    """LightCom-Q v2.0 generator with per-run hash, rigid lock, validation, and repair."""
-
-    def __init__(self, master_template: str) -> None:
-        self._master_raw = master_template
-        self._master_canon = _lightcom_canonicalize(master_template)
-        self._tmpl_hash16 = _lightcom_sha256_16(self._master_canon)
-
-    def compute_hash(self, inp: LightComQInputs) -> str:
-        material = (
-            f"{self._tmpl_hash16}|{inp.lat0:.6f}|{inp.lon0:.6f}|{inp.destination_mode}|{inp.vehicle_type}|{inp.time_local}|"
-            f"{int(inp.sim_seed)}|{float(inp.mut_strength):.4f}|{inp.wallpaper_hex}"
-        )
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-
-    def lock_line(self, run_hash: str) -> str:
-        return (
-            f"<LOCK|LCQ-V=2.0|ORDER=A0,A1,A2,A3,A4,A5,A6,A7|NO_PROSE=1|GPS_LIGHT=1|LMH_ONLY_SECTORS=1|SHOWSTOPPER_HIGH=1|HASH={run_hash}>"
-        )
-
-    def build(self, inp: LightComQInputs) -> Tuple[str, str]:
-        run_hash = self.compute_hash(inp)
-        p = LIGHTCOM_Q_MASTER_PROMPT_V20
-
-        repl = {
-            "ORIGIN_ADDRESS": str(inp.origin_address),
-            "DESTINATION_MODE": str(inp.destination_mode),
-            "LAT0": f"{float(inp.lat0):.6f}",
-            "LON0": f"{float(inp.lon0):.6f}",
-            "VEHICLE_TYPE": str(inp.vehicle_type),
-            "TIME_LOCAL": str(inp.time_local),
-            "W_M": str(int(inp.w_m)),
-            "FWD_M": str(int(inp.fwd_m)),
-            "QUANTUM_RESULTS": str(inp.quantum_results),
-            "CPU_USAGE": f"{float(inp.cpu_usage):.2f}",
-            "RAM_USAGE": f"{float(inp.ram_usage):.2f}",
-            "SIM_SEED": str(int(inp.sim_seed)),
-            "MUT_STRENGTH": f"{float(inp.mut_strength):.3f}",
-            "WALLPAPER_HEX": str(inp.wallpaper_hex),
-            "HASH": run_hash,
-        }
-        for k, v in repl.items():
-            p = p.replace("{" + k + "}", v)
+        # Calibration pulse (opaque handle for on-device legend)
+        cal_bar = _lightcom_make_calibration_bar(int(inp.sim_seed), length=24)
 
         hardening = (
             "[STRUCTURE_LOCK]\n"
             f"- FIRST LINE MUST BE EXACTLY:\n{self.lock_line(run_hash)}\n"
             "- Then output ONLY LightCom-Q frames A0..A7 with NO blank lines.\n"
+            f"- A0 MUT frame MUST include this exact calibration pulse:\nCAL: {cal_bar}\n"
             "- If you cannot comply, output ONLY: <LOCK-FAIL>\n"
             "[/STRUCTURE_LOCK]"
         )
@@ -4861,7 +4624,7 @@ class LightComQPromptGenerator:
 
         allowed_re = re.compile(
             r"^(<LOCK\|.*>|<LOCK-FAIL>|<LCQ\|V=2\.0\|ROLE=.*>|"
-            r"(SEED|MUT|WALL|WBAR|LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|H_EFF|DIST|ROLLBACK|NEWTUNE|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR|NEXT):)"
+            r"(SEED|MUT|WALL|WBAR|CAL|TXT16|LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|H_EFF|DIST|ROLLBACK|NEWTUNE|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR|NEXT):)"
         )
         for ln in lines[1:]:
             s = ln.strip()
@@ -5157,8 +4920,7 @@ class LightComEntropyReferee:
 
         return max(0.08, min(0.92, s))
 
-
-
+# -----------------------------------------------------------------------------
 # LightCom palette constants + on-device decoder (Light-in → English-out)
 # -----------------------------------------------------------------------------
 # IMPORTANT: Keep UTF-8 (no mojibake). These palette tokens are single Unicode
@@ -5456,7 +5218,6 @@ def lightcom_decode_to_english(output_text: str, *, legend: Optional[LightComLeg
 
     return "\n".join(parts).strip()
 
-
 def _lightcom_hex_to_palette_bar(hex_str: str) -> str:
     """
     Convert a hex string (e.g. 'A1B2C3') into a palette bar of emoji tokens.
@@ -5496,7 +5257,7 @@ def _lightcom_mutate_prompt(base_prompt: str, *, seed: int, strength: float, wal
 
     return pad + "\\n\\n" + base_prompt
 
-async def run_lightcom_scan_with_repairs(
+async def _legacy_run_lightcom_scan_with_repairs(
     generator: LightComPromptGenerator,
     inp: LightComInputs,
     call_llm_fn: Callable[[str], Any],
@@ -7391,6 +7152,19 @@ async def scan_debris_for_route(
     if protocol in ("v2", "v2.0", "lcq", "lightcomq"):
         sim_seed_material = f"{lat:.6f}|{lon:.6f}|{destination_mode}|{vehicle_type}|{time_local}"
         sim_seed = int(hashlib.sha256(sim_seed_material.encode("utf-8")).hexdigest()[:8], 16)
+        # Local calibration legend (on-device): rainbow pulse → English phrase
+        legend_path = os.getenv(
+            "LIGHTCOM_LEGEND_PATH",
+            os.path.join(os.path.expanduser("~"), ".lightcom_legend.json"),
+        )
+        try:
+            legend = LightComLegend.load(legend_path)
+            cal_bar = _lightcom_make_calibration_bar(int(sim_seed), length=24)
+            cal_sentence = os.getenv("LIGHTCOM_CAL_SENTENCE", "CALIBRATION_OK")
+            legend.put(cal_bar, cal_sentence)
+            legend.save(legend_path)
+        except Exception:
+            legend = LightComLegend({})
 
         lightcom_inp_q = LightComQInputs(
             origin_address=origin_address,
@@ -7521,28 +7295,18 @@ async def scan_debris_for_route(
             report = "Low"
             model_used = "offline"
     report = (report or "").strip()
-
-    # Optional: decode LightCom / LightCom-Q frames into English locally (Light-in → English-out)
-    if os.getenv("LIGHTCOM_DECODE_ENGLISH", "0").strip().lower() in ("1", "true", "yes", "on"):
+    # Optional: decode LightCom/LightCom-Q frames into English locally (Light-in → English-out)
+    if (os.getenv("LIGHTCOM_DECODE_ENGLISH", "0") or "0").strip() == "1":
         try:
-            legend_path = os.getenv("LIGHTCOM_LEGEND_PATH", os.path.expanduser("~/.lightcom_legend.json"))
+            legend_path = os.getenv(
+                "LIGHTCOM_LEGEND_PATH",
+                os.path.join(os.path.expanduser("~"), ".lightcom_legend.json"),
+            )
             legend = LightComLegend.load(legend_path)
-
-            # Optional: bind the CAL pulse to an English sentence (local-only)
-            cal_sentence = os.getenv("LIGHTCOM_CAL_SENTENCE", "").strip()
-            if cal_sentence:
-                mcal = re.search(r"^CAL:\s*(.+)$", report, flags=re.M)
-                if mcal:
-                    legend.put(mcal.group(1).strip(), cal_sentence)
-                    legend.save(legend_path)
-
-            decoded = lightcom_decode_to_english(report, legend=legend)
-            if decoded:
-                report = decoded
+            report = lightcom_decode_to_english(report, legend=legend)
         except Exception:
-            # Never fail the scan due to decoder issues.
+            # If decoder fails, keep raw frames
             pass
-
 
     harm_level = calculate_harm_level(report)
 
@@ -8904,29 +8668,12 @@ def view_report(report_id):
         t = (ratio - 0.5) / 0.5
         wheel_color = interpolate_color(yellow, red, t)
 
-    # Robust rendering: handle empty/None results and LightCom/LCQ angle-bracket frames safely.
-    report_text = report.get('result') if isinstance(report, dict) else None
-    if report_text is None:
-        report_text = ""
-    if not isinstance(report_text, str):
-        report_text = str(report_text)
-
-    # If this looks like LightCom/LCQ output, render as escaped <pre> to avoid HTML parsing.
-    is_lightcom = ("<LC" in report_text) or ("<LCQ" in report_text) or ("<LOCK" in report_text)
-
-    try:
-        if is_lightcom:
-            report_html = "<pre style=\"white-space:pre-wrap;word-break:break-word\">" + escape(report_text) + "</pre>"
-        else:
-            report_md = markdown(report_text)
-            allowed_tags = list(bleach.sanitizer.ALLOWED_TAGS) + [
-                'p', 'ul', 'ol', 'li', 'strong', 'em', 'h1', 'h2', 'h3', 'h4', 'h5',
-                'h6', 'br', 'pre', 'code'
-            ]
-            report_html = bleach.clean(report_md, tags=allowed_tags)
-    except Exception:
-        report_html = "<pre style=\"white-space:pre-wrap;word-break:break-word\">" + escape(report_text) + "</pre>"
-
+    report_md = markdown(report['result'])
+    allowed_tags = list(bleach.sanitizer.ALLOWED_TAGS) + [
+        'p', 'ul', 'ol', 'li', 'strong', 'em', 'h1', 'h2', 'h3', 'h4', 'h5',
+        'h6', 'br'
+    ]
+    report_html = bleach.clean(report_md, tags=allowed_tags)
     report_html_escaped = report_html.replace('\\', '\\\\')
     csrf_token = generate_csrf()
 
