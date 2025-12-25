@@ -824,7 +824,7 @@ class ColorSync:
             hexc = f"#{j:06x}"
             code = rng.choice(["A1","A2","B2","C1","C2","D1","E3"])
 
-            # Convert to perceptual coordinates
+            
             h, s, l = self._rgb_to_hsl(j)
             L, C, H = _approx_oklch_from_rgb(
                 (j >> 16 & 0xFF) / 255.0,
@@ -4028,9 +4028,7 @@ EXAMPLE
 {{"harm_ratio":0.12,"label":"Clear","color":"#22d3a6","confidence":0.93,"reasons":["Visibility good","Low congestion"],"blurb":"Stay alert and maintain safe following distance."}}
 """.strip()
 
-# -----------------------------
-# LLM Providers: OpenAI / Grok / Local Llama
-# -----------------------------
+
 
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _OPENAI_ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
@@ -5039,7 +5037,6 @@ def metrics_to_rgb(metrics: dict) -> Tuple[float, float, float]:
         float(max(0.0, min(1.0, b))),
     )
 
-
 def pennylane_entropic_score(rgb: Tuple[float, float, float], shots: int = 256) -> float:
     if qml is None or pnp is None:
         r, g, b = rgb
@@ -5080,7 +5077,6 @@ def pennylane_entropic_score(rgb: Tuple[float, float, float], shots: int = 256) 
 
 def entropic_to_modifier(score: float) -> float:
     return (score - 0.5) * 0.4
-
 
 def entropic_summary_text(score: float) -> str:
     if score >= 0.75:
@@ -5127,7 +5123,6 @@ def punkd_analyze(prompt_text: str, top_n: int = 12) -> Dict[str, float]:
         return {}
     return {k: float(v / maxv) for k, v in items}
 
-
 def punkd_apply(prompt_text: str, token_weights: Dict[str, float], profile: str = "balanced") -> Tuple[str, float]:
     if not token_weights:
         return prompt_text, 1.0
@@ -5143,7 +5138,6 @@ def punkd_apply(prompt_text: str, token_weights: Dict[str, float], profile: str 
     markers = " ".join([f"<ATTN:{t}:{round(w,2)}>" for t, w in sorted_tokens])
     patched = (prompt_text or "") + "\n\n[PUNKD_MARKERS] " + markers
     return patched, multiplier
-
 
 def chunked_generate(
     llm: "Llama",
@@ -5258,7 +5252,6 @@ def llama_local_predict_risk(scene: dict) -> Optional[str]:
     if llm is None:
         return None
 
-    
     prompt = build_road_scanner_prompt(scene, include_system_entropy=True)
 
     try:
@@ -5544,7 +5537,6 @@ def _parse_base(left: str) -> Tuple[str, str, str]:
     state  = m.group("state").strip().strip('"')
     return city, county, state
 
-
 def _first_line_stripped(text: str) -> str:
     return (text or "").splitlines()[0].strip()
 
@@ -5591,7 +5583,6 @@ def reverse_geocode(lat: float, lon: float) -> str:
     
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
-
 
 REVGEOCODE_ONLINE_V1 = True
 
@@ -5725,17 +5716,15 @@ def _lightbeam_sync(lat: float, lon: float) -> dict:
 
 
 
-
-
 class ULTIMATE_FORGE:
-    # NOTE: Keep source ASCII-only to avoid mojibake. Use \uXXXX escapes for quantum glyphs.
+    
     _forge_epoch = int(time.time() // 3600)
 
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
     ).digest()[:16]  # Critical fix: 16 bytes max
 
-    # Quantum symbols (runtime): Delta Psi Phi Omega nabla sqrt infinity proportional-to tensor-product
+    
     _QSYMS = "\u0394\u03A8\u03A6\u03A9\u2207\u221A\u221E\u221D\u2297"
 
     @classmethod
@@ -5965,8 +5954,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
     
     return deterministic
 
-
-
+         
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
     lon_encrypted = encrypt_data(str(lon))
@@ -6552,7 +6540,7 @@ async def scan_debris_for_route(
 
     report: str = ""
     if selected == "llama_local" and llama_local_ready():
-        # Local llama returns one word: Low/Medium/High
+        
         scene = {
             "location": street_name,
             "vehicle_type": vehicle_type,
