@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import asyncio
 import base64
 import colorsys
@@ -4519,12 +4518,7 @@ class LightComInputs:
     ram_usage: float = 0.0
 
 class LightComPromptGenerator:
-    """
-    Generates a rigid LightCom master prompt with:
-      - a first-line LOCK fingerprint (template hash)
-      - strict output contract (A1..A6 only, no prose/blank lines)
-      - local validation + repair prompt for retries
-    """
+    
 
     def __init__(self, master_template: str, addendum: str = "") -> None:
         self._master_raw = master_template
@@ -4557,7 +4551,7 @@ class LightComPromptGenerator:
             ram_usage=inp.ram_usage,
         )
 
-        # Hard constraints placed BEFORE the master prompt to reduce drift
+        
         hardening = (
             "[STRUCTURE_LOCK]\\n"
             f"- FIRST LINE MUST BE EXACTLY:\\n{self.lock_line()}\\n"
@@ -4580,7 +4574,7 @@ class LightComPromptGenerator:
         out = output.replace("\r\n", "\n").replace("\r", "\n")
         lines = out.split("\n")
 
-        # No leading/trailing blank lines
+    
         if not lines or not lines[0].strip():
             return False, ["missing_lock_line"]
         if any((ln == "") for ln in lines):
@@ -4589,7 +4583,7 @@ class LightComPromptGenerator:
         if lines[0].strip() != self.lock_line():
             errs.append("lock_line_mismatch")
 
-        # Collect LC headers and check role ordering
+    
         header_re = re.compile(r"^<LC\|V=1\.1\|ROLE=(RTS|FSD|SCN|RSK|AUD|AGG)\|ID=A[1-6]\|")
         headers = [ln.strip() for ln in lines if header_re.match(ln.strip())]
         roles = []
@@ -4602,7 +4596,7 @@ class LightComPromptGenerator:
         if roles != expected:
             errs.append(f"bad_frame_order_or_count:{roles}")
 
-        # Minimal â€œno proseâ€ check: every non-empty line must be LOCK or LC header or field line
+        
         allowed_re = re.compile(
             r"^(<LOCK\|.*>|<LOCK-FAIL>|<LC\|V=1\.1\|ROLE=.*>|"
             r"(LOOP|DENS|MERGE|CURVE|RAIN|WIND|VIS\s|TEMP|LAT|LON|GPS|SEV|PRC|CNF|CLS|STATUS|COUNT|DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):)"
@@ -4612,7 +4606,7 @@ class LightComPromptGenerator:
                 errs.append("unexpected_line:" + ln.strip()[:80])
                 break
 
-        # Enforce LMH-only sectors
+        
         sector_re = re.compile(r"^(DEBRIS|TRAFFC|COLLIS|PEDSTR|WEATHR):\s*([â¬›ðŸŸ¥ðŸŸ§])$")
         for ln in lines:
             m = sector_re.match(ln.strip())
@@ -5264,12 +5258,12 @@ def llama_local_predict_risk(scene: dict) -> Optional[str]:
     if llm is None:
         return None
 
-    # Use PQE: system metrics -> RGB -> entropic score (PennyLane when available) and PUNKD chunked generation.
+    
     prompt = build_road_scanner_prompt(scene, include_system_entropy=True)
 
     try:
         text_out = ""
-        # Prefer chunked generation to reduce partial/poisoned outputs.
+        
         try:
             text_out = chunked_generate(
                 llm=llm,
@@ -5298,7 +5292,7 @@ def llama_local_predict_risk(scene: dict) -> Optional[str]:
         return None
 
 def llama_download_model_httpx() -> tuple[bool, str]:
-    # Synchronous download to keep this simple inside Flask admin action.
+
     if Path is None:
         return False, "path_unavailable"
     url = LLAMA_MODEL_REPO + LLAMA_MODEL_FILE
@@ -5798,16 +5792,11 @@ Rules:
 - No extra words.
 """.strip()
 async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optional[str] = None) -> str:
-    # Reverse geocode with online-first accuracy + cross-model formatting consensus.
-    # Primary: Nominatim structured address (deterministic formatting)
-    # Secondary: LightBeamSync consensus between OpenAI and Grok (format-only, no invention)
-    # Final: offline city dataset (best-effort)
-
-    # Online reverse geocode first (fast, accurate when available).
+    
     nom_data = await reverse_geocode_nominatim(lat, lon)
     online_line = format_reverse_geocode_line(nom_data)
 
-    # Compute offline only if needed (it scans the full city list).
+    
     offline_line = ""
     if not online_line:
         try:
@@ -5817,7 +5806,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
 
     base_guess = online_line or offline_line or "Unknown Location"
 
-    # Build minimal components for validation/allowlist.
+    
     addr = (nom_data.get("address") if isinstance(nom_data, dict) else None) or {}
     if not isinstance(addr, dict):
         addr = {}
@@ -5836,7 +5825,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
 
     allow_words = _build_allowlist_from_components(components)
 
-    # Required signals (if online data exists, require country and at least one locality token).
+    
     required_words: set[str] = set()
     if online_line:
         country = addr.get("country")
@@ -5885,13 +5874,13 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
     if provider not in ("openai", "grok", "llama_local", None):
         provider = None
 
-    # LightBeamSync token (stable per coordinate).
+    
     lb = _lightbeam_sync(lat, lon)
     qid = (lb.get("qid25") or {})
     oklch = (lb.get("oklch") or {})
 
-    # Provide authoritative JSON (trimmed) plus parsed components. Models must not invent.
-    # Keep JSON small to reduce token use.
+    
+    
     auth_obj = {}
     if isinstance(nom_data, dict):
         auth_obj = {
@@ -5921,7 +5910,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
         "- Prefer including street (house number + road) when present.\n"
     )
 
-    # Deterministic best-effort (used if models fail or disagree).
+    
     deterministic = base_guess
 
     async def _try_openai(p: str) -> Optional[str]:
@@ -5948,7 +5937,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
             return None
         return None
 
-    # Lightbeam cross-check: two independent formatters, same constraints.
+    
     openai_line = None
     grok_line = None
 
@@ -5956,24 +5945,24 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
         openai_line = await _try_openai(prompt)
 
     if (provider in (None, "grok")) and os.getenv("GROK_API_KEY"):
-        # Include OpenAI suggestion as an optional hint, but still enforce "no invention" via allowlist.
+        
         p2 = prompt
         if openai_line:
             p2 = prompt + "\nOpenAI_candidate: " + openai_line + "\n"
         grok_line = await _try_grok(p2)
 
-    # If both agree, accept.
+    
     if openai_line and grok_line:
         if _clean(openai_line).lower() == _clean(grok_line).lower():
             return openai_line
 
-    # If one exists, prefer the one that adds street detail beyond deterministic.
+    
     if openai_line and openai_line != deterministic:
         return openai_line
     if grok_line and grok_line != deterministic:
         return grok_line
 
-    # If we have an online deterministic answer, trust it over offline.
+    
     return deterministic
 
 
