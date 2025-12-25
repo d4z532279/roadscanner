@@ -51,6 +51,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from wtforms import PasswordField, SelectField, StringField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, Length, ValidationError
 from argon2 import PasswordHasher
+from argon2.low_level import ArgonType
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.backends import default_backend
