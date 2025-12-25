@@ -4108,8 +4108,8 @@ def _openai_extract_output_text(data: dict) -> str:
 async def run_openai_response_text(
     prompt: str,
     model: Optional[str] = None,
-    max_output_tokens: int = 220,
-    temperature: float = 0.0,
+    max_output_tokens: int = 582,
+    temperature: float = 0.7,
     reasoning_effort: str = "none",
 ) -> Optional[str]:
     client = _maybe_openai_async_client()
