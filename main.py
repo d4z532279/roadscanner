@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 import logging
 import httpx
@@ -14,7 +13,6 @@ from wtforms.validators import DataRequired, Length
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
-
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type
@@ -60,13 +58,10 @@ import logging
 import asyncio
 import numpy as np
 from typing import Optional, Mapping, Any, Tuple
-
-import pennylane 
 import random
 import asyncio
 from typing import Optional
 from pennylane import numpy as pnp
-
 from flask import request, session, redirect, url_for, render_template_string, jsonify
 from flask_wtf.csrf import generate_csrf, validate_csrf
 from wtforms.validators import ValidationError
@@ -102,18 +97,11 @@ try:
     import fcntl  
 except Exception:
     fcntl = None
-class SealedCache(TypedDict, total=False):
-    x25519_priv_raw: bytes
-    pq_priv_raw: Optional[bytes]
-    sig_priv_raw: bytes
-    kem_alg: str
-    sig_alg: str
+
 try:
     import numpy as np
 except Exception:
     np = None
-
-
 import geonamescache
 
 
@@ -144,6 +132,13 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
+
+class SealedCache(TypedDict, total=False):
+    x25519_priv_raw: bytes
+    pq_priv_raw: Optional[bytes]
+    sig_priv_raw: bytes
+    kem_alg: str
+    sig_alg: str
 
 class _StartupOnceMiddleware:
     def __init__(self, wsgi_app):
@@ -275,8 +270,6 @@ def _gen_passphrase() -> str:
 def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> None:
 
     exports: list[tuple[str,str]] = []
-
-
     if not os.getenv("ENCRYPTION_PASSPHRASE"):
         pw = _gen_passphrase()
         os.environ["ENCRYPTION_PASSPHRASE"] = pw
@@ -473,8 +466,6 @@ def get_very_complex_random_interval():
 SESSION_KEY_ROTATION_ENABLED = str(os.getenv("QRS_ROTATE_SESSION_KEY", "1")).lower() not in ("0", "false", "no", "off")
 SESSION_KEY_ROTATION_PERIOD_SECONDS = int(os.getenv("QRS_SESSION_KEY_ROTATION_PERIOD_SECONDS", "1800"))  # 30 minutes
 SESSION_KEY_ROTATION_LOOKBACK = int(os.getenv("QRS_SESSION_KEY_ROTATION_LOOKBACK", "8"))  # current + previous keys
-
-
 
 _LAST_SESSION_KEY_WINDOW: int | None = None
 _SESSION_KEY_ROTATION_LOG_LOCK = threading.Lock()
