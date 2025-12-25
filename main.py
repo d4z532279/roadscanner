@@ -1,93 +1,115 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import asyncio
-import base64
-import colorsys
-import hashlib
-import hmac
-import httpx
-import itertools
-import json
 import logging
-import math
-import os
-import random
-import re
-import secrets
+import httpx
 import sqlite3
-import string
-import sys
-import threading
-import time
-import uuid
-from collections import deque
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
+import psutil
+from flask import (
+    Flask, render_template_string, request, redirect, url_for,
+    session, jsonify, flash, make_response, Response, stream_with_context)
+from flask_wtf import FlaskForm, CSRFProtect
+from flask_wtf.csrf import generate_csrf
+from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
+from wtforms.validators import DataRequired, Length
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.backends import default_backend
+
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from argon2.low_level import Type
+from datetime import timedelta, datetime
+from markdown2 import markdown
 import bleach
 import geonamescache
-import numpy as np
-import psutil
-from markdown2 import markdown
-from flask import (
-    Flask,
-    Response,
-    flash,
-    jsonify,
-    make_response,
-    redirect,
-    render_template_string,
-    request,
-    session,
-    stream_with_context,
-    url_for,
-)
-from flask.json.tag import TaggedJSONSerializer
-from flask.sessions import SecureCookieSessionInterface
-from flask_wtf import CSRFProtect, FlaskForm
-from flask_wtf.csrf import generate_csrf, validate_csrf
-from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
-from werkzeug.middleware.proxy_fix import ProxyFix
-from wtforms import PasswordField, SelectField, StringField, SubmitField, TextAreaField
-from wtforms.validators import DataRequired, Length, ValidationError
-from argon2 import PasswordHasher
-from argon2.low_level import ArgonType
-from argon2.exceptions import VerifyMismatchError
-from argon2.low_level import Type, hash_secret_raw
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.hashes import SHA3_512
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from numpy.random import Generator, PCG64DXSM
+import random
+import re
+import base64
+import math
+import threading
+import time
+import hmac
+import hashlib
+import secrets
+from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, cast
+import uuid
+import asyncio
+import sys
 try:
     import pennylane as qml
     from pennylane import numpy as pnp
 except Exception:
     qml = None
     pnp = None
+import numpy as np
+from pathlib import Path
+import os
+import json
+import string
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from argon2.low_level import hash_secret_raw, Type as ArgonType
+from numpy.random import Generator, PCG64DXSM
+import itertools
+import colorsys
+import os
+import json
+import time
+import bleach
+import logging
+import asyncio
+import numpy as np
+from typing import Optional, Mapping, Any, Tuple
+
+import pennylane 
+import random
+import asyncio
+from typing import Optional
+from pennylane import numpy as pnp
+
+from flask import request, session, redirect, url_for, render_template_string, jsonify
+from flask_wtf.csrf import generate_csrf, validate_csrf
+from wtforms.validators import ValidationError
+import sqlite3
+from dataclasses import dataclass
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
+from collections import deque
+from flask.sessions import SecureCookieSessionInterface
+from flask.json.tag  import TaggedJSONSerializer
+from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
+import zlib as _zlib 
 try:
-    import zstandard as zstd
+    import zstandard as zstd  
     _HAS_ZSTD = True
 except Exception:
-    zstd = None
+    zstd = None  
     _HAS_ZSTD = False
+
 try:
     from typing import TypedDict
 except ImportError:
     from typing_extensions import TypedDict
+
 try:
-    import oqs as _oqs
-    oqs = cast(Any, _oqs)
+    import oqs as _oqs  
+    oqs = cast(Any, _oqs)  
 except Exception:
     oqs = cast(Any, None)
+
+from werkzeug.middleware.proxy_fix import ProxyFix
 try:
-    import fcntl
+    import fcntl  
 except Exception:
     fcntl = None
-import zlib as _zlib
+
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+
+import geonamescache
 
 
 geonames = geonamescache.GeonamesCache()
