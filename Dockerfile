@@ -1,3 +1,4 @@
+
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -51,23 +52,15 @@ RUN set -euo pipefail \
 
 # ------------------------------------------------------------
 # Bootstrap minimal Python for PQ verification
+# (avoid brittle hash lists for verifier deps)
 # ------------------------------------------------------------
 RUN python -m pip install --upgrade pip
 
-RUN cat > /tmp/pq_bootstrap.txt <<'REQ'
-cffi==2.0.0 \
-    --hash=sha256:00bdf7acc5f795150faa6957054fbbca2439db2f775ce831222b66f192f03beb \
-    --hash=sha256:07b271772c100085dd28b74fa0cd81c8fb1a3ba18b21e03d7c27f3436a10606b
-pycparser==2.23 \
-    --hash=sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2 \
-    --hash=sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934
-liboqs-python==0.14.1 \
-    --hash=sha256:e3c81e632d02122dda3734edc4ba83bd457eefa3fdb266d33ea908a77a17642f
-REQ
-
+# Install verifier tool only (no dependency resolution here).
+# Application dependencies remain hash-locked later via requirements.txt.
 RUN set -euo pipefail \
- && python -m pip install --no-cache-dir --require-hashes -r /tmp/pq_bootstrap.txt \
- && rm -f /tmp/pq_bootstrap.txt
+ && python -m pip install --no-cache-dir --no-deps \
+    liboqs-python==0.14.1
 
 # ------------------------------------------------------------
 # PQ authenticity verification (Dilithium)
@@ -83,28 +76,33 @@ req = pathlib.Path("requirements.txt")
 
 for p in (manifest, sig, pub, req):
     if not p.exists():
-        print(f"ERROR: missing {p}", file=sys.stderr)
+        print(f"ERROR: missing required file: {p}", file=sys.stderr)
         sys.exit(2)
 
 msg = manifest.read_bytes()
 signature = base64.b64decode(sig.read_text().strip())
 pubkey = base64.b64decode(pub.read_text().strip())
 
-with oqs.Signature("Dilithium2") as v:
+alg = "Dilithium2"
+with oqs.Signature(alg) as v:
     if not v.verify(msg, signature, pubkey):
-        print("ERROR: PQ signature verification failed", file=sys.stderr)
+        print("ERROR: PQ signature verification FAILED for lock.manifest.json", file=sys.stderr)
         sys.exit(3)
 
-expected = json.loads(msg)["requirements_txt_sha256"]
-actual = hashlib.sha256(req.read_bytes()).hexdigest()
-
-if actual != expected:
-    print("ERROR: requirements.txt SHA256 mismatch", file=sys.stderr)
-    print("expected:", expected, file=sys.stderr)
-    print("actual:  ", actual, file=sys.stderr)
+m = json.loads(msg.decode("utf-8"))
+expected = (m.get("requirements_txt_sha256") or "").lower().strip()
+if not expected or len(expected) != 64:
+    print("ERROR: manifest missing requirements_txt_sha256", file=sys.stderr)
     sys.exit(4)
 
-print("OK: PQ verification successful")
+actual = hashlib.sha256(req.read_bytes()).hexdigest().lower()
+if actual != expected:
+    print("ERROR: requirements.txt SHA256 mismatch", file=sys.stderr)
+    print(f" expected: {expected}", file=sys.stderr)
+    print(f"   actual: {actual}", file=sys.stderr)
+    sys.exit(5)
+
+print("OK: PQ signature + requirements.txt SHA256 verified.")
 PY
 
 # ------------------------------------------------------------
@@ -119,6 +117,7 @@ COPY . .
 
 RUN useradd -ms /bin/bash appuser \
  && mkdir -p /app/static \
+ && chmod 755 /app/static \
  && chown -R appuser:appuser /app
 
 USER appuser
@@ -126,3 +125,4 @@ USER appuser
 EXPOSE 3000
 
 CMD ["gunicorn","main:app","-b","0.0.0.0:3000","-w","4","-k","gthread","--threads","4","--timeout","180","--graceful-timeout","30","--log-level","info","--preload","--max-requests","1000","--max-requests-jitter","200"]
+```0
