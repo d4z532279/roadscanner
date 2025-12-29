@@ -125,4 +125,4 @@ USER appuser
 EXPOSE 3000
 
 CMD ["gunicorn","main:app","-b","0.0.0.0:3000","-w","4","-k","gthread","--threads","4","--timeout","180","--graceful-timeout","30","--log-level","info","--preload","--max-requests","1000","--max-requests-jitter","200"]
-```0
+
