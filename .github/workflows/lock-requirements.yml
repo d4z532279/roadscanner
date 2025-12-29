@@ -1,4 +1,5 @@
-name: Generate Locked Requirements
+
+name: Lock requirements + embed liboqs SHA256
 
 on:
   workflow_dispatch:
@@ -7,18 +8,21 @@ on:
       - requirements.in
 
 jobs:
-  lock-deps:
+  lock:
     runs-on: ubuntu-latest
 
+    # Match your runtime ABI (Debian slim) so wheel hashes align with your Docker build
     container:
       image: python:3.12-slim
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install pip-tools
+      - name: Install tools
         run: |
+          apt-get update && apt-get install -y --no-install-recommends curl ca-certificates coreutils git \
+            && rm -rf /var/lib/apt/lists/*
           python -m pip install --upgrade pip
           pip install pip-tools
 
@@ -30,9 +34,29 @@ jobs:
             --output-file requirements.txt \
             requirements.in
 
-      - name: Upload locked requirements as artifact
+      - name: Compute liboqs SHA256 (0.14.0 tarball) + prepend into requirements.txt
+        env:
+          LIBOQS_VERSION: "0.14.0"
+        run: |
+          set -euo pipefail
+          url="https://github.com/open-quantum-safe/liboqs/archive/refs/tags/${LIBOQS_VERSION}.tar.gz"
+          curl -fsSL -o /tmp/liboqs.tar.gz "$url"
+          sha256="$(sha256sum /tmp/liboqs.tar.gz | awk '{print $1}')"
+
+          {
+            echo "# liboqs_release=${LIBOQS_VERSION}"
+            echo "# liboqs_tarball_sha256=${sha256}"
+            echo "# liboqs_tarball_url=${url}"
+            echo "# generated_by=github_actions_pip_compile_with_hashes"
+            echo
+            cat requirements.txt
+          } > requirements.txt.new
+
+          mv requirements.txt.new requirements.txt
+
+      - name: Upload requirements.txt artifact
         uses: actions/upload-artifact@v4
         with:
-          name: requirements-locked
+          name: requirements-locked-with-liboqa-sha256
           path: requirements.txt
           retention-days: 30
