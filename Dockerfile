@@ -1,5 +1,4 @@
 # syntax=docker/dockerfile:1
-
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -9,9 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OQS_INSTALL_PATH=/usr/local \
     LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
 
-# ------------------------------
-# System deps
-# ------------------------------
+# ---- system deps (build + verify) ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -19,23 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     build-essential \
     pkg-config \
+    python3-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# ------------------------------
-# Copy PQ verification assets (you said they're in repo root)
-#   - lock.manifest.json
-#   - lock.manifest.pqsig
-#   - pq_pubkey.b64
-# ------------------------------
-COPY lock.manifest.json lock.manifest.json
-COPY lock.manifest.pqsig lock.manifest.pqsig
-COPY pq_pubkey.b64 pq_pubkey.b64
-
-# ------------------------------
-# Build + install liboqs (SHA256 verified)
-# ------------------------------
+# ---- build + verify liboqs (pinned + sha256) ----
 ARG LIBOQS_VERSION=0.14.0
 ARG LIBOQS_TARBALL_SHA256=5b0df6138763b3fc4e385d58dbb2ee7c7c508a64a413d76a917529e3a9a207ea
 
@@ -56,9 +42,8 @@ RUN set -euo pipefail; \
     ldconfig; \
     rm -rf /tmp/liboqs.tar.gz /tmp/liboqs-src
 
-# ------------------------------
-# Build + install liboqs-python (SHA256 verified)
-# ------------------------------
+# ---- build + verify liboqs-python (PINNED + sha256) ----
+# This is the Python package that provides `import oqs`
 ARG LIBOQS_PY_VERSION=0.12.0
 ARG LIBOQS_PY_TARBALL_SHA256=9a92e781800a3a3ea83a2ccfb4f81211cacd38f34b98b40df59f2023494102d6
 
@@ -69,93 +54,86 @@ RUN set -euo pipefail; \
     mkdir -p /tmp/liboqs-python-src; \
     tar -xzf /tmp/liboqs-python.tar.gz -C /tmp/liboqs-python-src --strip-components=1; \
     cd /tmp/liboqs-python-src; \
-    cmake -S . -B build -DCMAKE_PREFIX_PATH=/usr/local; \
+    cmake -S . -B build -DCMAKE_PREFIX_PATH=/usr/local -G Ninja; \
     cmake --build build --parallel; \
-    python -m pip install --upgrade pip; \
-    python -m pip install --no-cache-dir dist/*.whl; \
+    # installs the built wheel (pins to the tarball tag above)
+    pip install --no-cache-dir dist/*.whl; \
     rm -rf /tmp/liboqs-python.tar.gz /tmp/liboqs-python-src
 
-# ------------------------------
-# Pin pyoqs (Python API layer) so PQ verification is deterministic
-# ------------------------------
-ARG PYOQS_VERSION=0.14.0
-RUN set -euo pipefail; \
-    python -m pip install --no-cache-dir "pyoqs==${PYOQS_VERSION}"; \
-    python - <<'PY' \
-import oqs; \
-print("pyoqs ok, liboqs version:", oqs.oqs_version()) \
-PY
+# ---- copy PQ manifest + signature + pubkey from REPO ROOT ----
+# (you said they are NOT in ./pq/, they're in the base repo dir)
+COPY lock.manifest.json lock.manifest.pqsig pq_pubkey.b64 ./
 
-# ------------------------------
-# PQ authenticity gate:
-#   - verify Dilithium2 signature over lock.manifest.json
-#   - verify manifest's SHA256 matches requirements.txt content
-# Fails the build if anything is wrong.
-# ------------------------------
-ARG PQSIG_ALG=Dilithium2
+# ---- copy requirements + verify against PQ manifest BEFORE pip install ----
+COPY requirements.txt ./
 
-# Copy requirements before verification so we can hash it
-COPY requirements.txt requirements.txt
-
+# Verifies:
+#  1) requirements.txt sha256 matches lock.manifest.json requirements_txt_sha256
+#  2) Dilithium2 signature in lock.manifest.pqsig verifies over the exact bytes of lock.manifest.json
+#     using pq_pubkey.b64 (base64 pubkey)
+#
+# Signature file can be either raw bytes or base64 text; this handles both.
 RUN set -euo pipefail; \
     python - <<'PY' \
-import base64, hashlib, json, os, sys \
-import oqs \
-ALG = os.environ.get("PQSIG_ALG","Dilithium2") \
- \
-def die(msg, code=2): \
-    print("ERROR:", msg, file=sys.stderr) \
-    sys.exit(code) \
- \
-for p in ("lock.manifest.json","lock.manifest.pqsig","pq_pubkey.b64","requirements.txt"): \
-    if not os.path.exists(p): \
-        die(f"missing required file: {p}", 10) \
- \
-# Load pubkey \
-with open("pq_pubkey.b64","rb") as f: \
-    pub = base64.b64decode(f.read().strip()) \
- \
-# Load manifest bytes + signature \
-manifest_bytes = open("lock.manifest.json","rb").read() \
-sig = open("lock.manifest.pqsig","rb").read() \
- \
-# Verify signature over manifest bytes \
-with oqs.Signature(ALG) as v: \
-    ok = v.verify(manifest_bytes, sig, pub) \
-if not ok: \
-    die("PQ signature verification FAILED for lock.manifest.json", 20) \
- \
-# Parse manifest + verify it binds requirements.txt sha256 \
+import base64, binascii, hashlib, json, os, sys \
+\
+MANIFEST = "lock.manifest.json" \
+SIGFILE  = "lock.manifest.pqsig" \
+PUBFILE  = "pq_pubkey.b64" \
+\
+# 1) requirements.txt sha256 check \
+with open(MANIFEST, "rb") as f: \
+    manifest_bytes = f.read() \
+manifest = json.loads(manifest_bytes.decode("utf-8")) \
+expected_req_sha = manifest.get("requirements_txt_sha256") \
+if not expected_req_sha: \
+    raise SystemExit("lock.manifest.json missing requirements_txt_sha256") \
+\
+h = hashlib.sha256() \
+with open("requirements.txt", "rb") as f: \
+    for chunk in iter(lambda: f.read(1024 * 1024), b""): \
+        h.update(chunk) \
+actual_req_sha = h.hexdigest() \
+if actual_req_sha != expected_req_sha: \
+    raise SystemExit(f"requirements.txt sha256 mismatch: expected {expected_req_sha} got {actual_req_sha}") \
+\
+# 2) PQ signature verify over *exact manifest bytes* \
+# pubkey is base64 text \
+pub_b64 = open(PUBFILE, "rb").read().strip() \
+pubkey = base64.b64decode(pub_b64) \
+\
+sig_raw = open(SIGFILE, "rb").read().strip() \
+# Try: if it's base64 text, decode; else treat as raw signature \
 try: \
-    man = json.loads(manifest_bytes.decode("utf-8")) \
+    # accept common "base64 text" signatures \
+    sig = base64.b64decode(sig_raw, validate=True) \
+    # If validate=True succeeded but produced empty, fallback to raw \
+    if not sig: \
+        sig = sig_raw \
+except (binascii.Error, ValueError): \
+    sig = sig_raw \
+\
+pq_alg = manifest.get("pq_alg", "Dilithium2") \
+try: \
+    import oqs \
 except Exception as e: \
-    die(f"manifest JSON parse failed: {e}", 21) \
- \
-req_sha_expected = (man.get("requirements_txt_sha256") or "").strip().lower() \
-if len(req_sha_expected) != 64 or any(c not in "0123456789abcdef" for c in req_sha_expected): \
-    die("manifest missing/invalid requirements_txt_sha256", 22) \
- \
-req_bytes = open("requirements.txt","rb").read() \
-req_sha_actual = hashlib.sha256(req_bytes).hexdigest() \
-if req_sha_actual != req_sha_expected: \
-    die(f"requirements.txt sha256 mismatch: expected {req_sha_expected} got {req_sha_actual}", 23) \
- \
-print("OK: PQ signature valid + manifest binds requirements.txt sha256") \
+    raise SystemExit(f"failed to import oqs (liboqs-python): {e}") \
+\
+with oqs.Signature(pq_alg) as s: \
+    ok = s.verify(manifest_bytes, sig, pubkey) \
+if not ok: \
+    raise SystemExit(f"PQ signature verify FAILED (alg={pq_alg})") \
+\
+print(f"PQ verify OK (alg={pq_alg}); requirements.txt sha256 OK") \
 PY
 
-# ------------------------------
-# Install Python deps (hash-locked)
-# ------------------------------
+# ---- install dependencies (hash-locked) ----
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
-# ------------------------------
-# App copy
-# ------------------------------
+# ---- app sources ----
 COPY . .
 
-# ------------------------------
-# Create unprivileged user
-# ------------------------------
+# ---- non-root runtime ----
 RUN useradd -ms /bin/bash appuser \
  && mkdir -p /app/static \
  && chmod 755 /app/static \
