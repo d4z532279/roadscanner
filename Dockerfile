@@ -1,5 +1,4 @@
 
-# Python 3.12 to match your project
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -9,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OQS_INSTALL_PATH=/usr/local \
     LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
 
-# --- system deps for liboqs build + wheels ---
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -21,14 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# ------------------------------
-# Copy PQ authenticity artifacts (you said they are in repo root)
-# ------------------------------
+
 COPY lock.manifest.json lock.manifest.pqsig pq_pubkey.b64 requirements.txt ./
 
-# ------------------------------
-# Build + install liboqs (SHA256 pinned)
-# ------------------------------
 ARG LIBOQS_VERSION=0.14.0
 ARG LIBOQS_TARBALL_SHA256=5b0df6138763b3fc4e385d58dbb2ee7c7c508a64a413d76a917529e3a9a207ea
 
@@ -49,73 +43,57 @@ RUN set -euo pipefail; \
     ldconfig; \
     rm -rf /tmp/liboqs.tar.gz /tmp/liboqs-src
 
-# ------------------------------
-# Install liboqs-python from PyPI (PINNED)
-# NOTE: this is separate from requirements.txt so you can keep --require-hashes there
-# ------------------------------
-ARG LIBOQS_PYPI_VERSION=0.14.1
-RUN set -euo pipefail; \
-    python -m pip install --upgrade pip; \
-    pip install --no-cache-dir "liboqs-python==${LIBOQS_PYPI_VERSION}"
 
-# ------------------------------
-# PQ authenticity verification of your lock manifest
-# - verifies that lock.manifest.json SHA256 matches requirements.txt SHA256
-# - verifies Dilithium signature over lock.manifest.json using pq_pubkey.b64
-# ------------------------------
 RUN set -euo pipefail; \
-    python - <<'PY' \
-import base64, hashlib, json, sys, pathlib \
-import oqs \
-\
-manifest_path = pathlib.Path("lock.manifest.json") \
-sig_path = pathlib.Path("lock.manifest.pqsig") \
-pub_path = pathlib.Path("pq_pubkey.b64") \
-req_path = pathlib.Path("requirements.txt") \
-\
-for p in (manifest_path, sig_path, pub_path, req_path): \
-    if not p.exists(): \
-        print(f"ERROR: missing required file: {p}", file=sys.stderr) \
-        sys.exit(2) \
-\
-# 1) Verify manifest signature (Dilithium2) \
-alg = "Dilithium2" \
-pub = base64.b64decode(pub_path.read_text().strip()) \
-sig = base64.b64decode(sig_path.read_text().strip()) \
-msg = manifest_path.read_bytes() \
-\
-with oqs.Signature(alg) as v: \
-    if not v.verify(msg, sig, pub): \
-        print("ERROR: PQ signature verification FAILED for lock.manifest.json", file=sys.stderr) \
-        sys.exit(3) \
-\
-# 2) Verify requirements.txt SHA256 matches manifest expectation \
-m = json.loads(msg.decode("utf-8")) \
-expected = (m.get("requirements_txt_sha256") or "").lower().strip() \
-if not expected or len(expected) != 64: \
-    print("ERROR: manifest missing requirements_txt_sha256", file=sys.stderr) \
-    sys.exit(4) \
-\
-actual = hashlib.sha256(req_path.read_bytes()).hexdigest().lower() \
-if actual != expected: \
-    print("ERROR: requirements.txt SHA256 mismatch", file=sys.stderr) \
-    print(f" expected: {expected}", file=sys.stderr) \
-    print(f"   actual: {actual}", file=sys.stderr) \
-    sys.exit(5) \
-\
-print("OK: PQ signature + requirements.txt SHA256 verified.") \
+    python - <<'PY'
+import base64, hashlib, json, sys, pathlib
+import oqs
+
+manifest_path = pathlib.Path("lock.manifest.json")
+sig_path = pathlib.Path("lock.manifest.pqsig")
+pub_path = pathlib.Path("pq_pubkey.b64")
+req_path = pathlib.Path("requirements.txt")
+
+for p in (manifest_path, sig_path, pub_path, req_path):
+    if not p.exists():
+        print(f"ERROR: missing required file: {p}", file=sys.stderr)
+        sys.exit(2)
+
+alg = "Dilithium2"
+pub = base64.b64decode(pub_path.read_text().strip())
+sig = base64.b64decode(sig_path.read_text().strip())
+msg = manifest_path.read_bytes()
+
+with oqs.Signature(alg) as v:
+    if not v.verify(msg, sig, pub):
+        print("ERROR: PQ signature verification FAILED for lock.manifest.json", file=sys.stderr)
+        sys.exit(3)
+
+m = json.loads(msg.decode("utf-8"))
+expected = (m.get("requirements_txt_sha256") or "").lower().strip()
+if not expected or len(expected) != 64:
+    print("ERROR: manifest missing requirements_txt_sha256", file=sys.stderr)
+    sys.exit(4)
+
+actual = hashlib.sha256(req_path.read_bytes()).hexdigest().lower()
+if actual != expected:
+    print("ERROR: requirements.txt SHA256 mismatch", file=sys.stderr)
+    print(f" expected: {expected}", file=sys.stderr)
+    print(f"   actual: {actual}", file=sys.stderr)
+    sys.exit(5)
+
+print("OK: PQ signature + requirements.txt SHA256 verified.")
 PY
 
-# ------------------------------
-# Install Python deps with hash checking
-# (will fail if ANY hash mismatches)
-# ------------------------------
-RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
-# Copy the rest of the app
+RUN set -euo pipefail; \
+    python -m pip install --upgrade pip; \
+    pip install --no-cache-dir --require-hashes -r requirements.txt
+
+
 COPY . .
 
-# Unprivileged user + perms
+
 RUN useradd -ms /bin/bash appuser \
  && mkdir -p /app/static \
  && chmod 755 /app/static \
