@@ -126,6 +126,10 @@
       "version": "3.1.6"
     },
     {
+      "name": "liboqs-python",
+      "version": "0.14.1"
+    },
+    {
       "name": "llama-cpp-python",
       "version": "0.3.16"
     },
@@ -227,5 +231,5 @@
     }
   ],
   "pq_alg": "Dilithium2",
-  "requirements_txt_sha256": "6e430a5fcb32f65f0f75507c6d3d6a9bb1e9135f23787dbc5bcb34a9f409243e"
+  "requirements_txt_sha256": "39e9404d4091393d84e2eaa132f19abf8c9efd95a36d20534f1137128d21fab5"
 }
