@@ -1,4 +1,5 @@
-name: Lock requirements + liboqs & liboqs-python SHA256
+
+name: Lock requirements + liboqs SHA256s
 
 on:
   workflow_dispatch:
@@ -14,17 +15,28 @@ jobs:
       image: python:3.12-slim
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install pip-tools and utilities
+      - name: Install system tools
         run: |
-          apt-get update && apt-get install -y curl ca-certificates
+          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl \
+            ca-certificates \
+            coreutils
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Install pip-tools
+        run: |
+          set -e
           python -m pip install --upgrade pip
           pip install pip-tools
 
-      - name: Generate hash-locked requirements
+      - name: Generate hash-locked requirements.txt
         run: |
+          set -e
           pip-compile \
             --generate-hashes \
             --resolver=backtracking \
@@ -32,38 +44,43 @@ jobs:
             requirements.in
 
       - name: Compute liboqs SHA256
-        env:
-          LIBOQS_VERSION: "0.14.0"
         run: |
+          set -e
+          LIBOQS_VERSION="0.14.0"
           curl -fsSL -o /tmp/liboqs.tar.gz \
             "https://github.com/open-quantum-safe/liboqs/archive/refs/tags/${LIBOQS_VERSION}.tar.gz"
-          sha256oqs=$(sha256sum /tmp/liboqs.tar.gz | awk '{print $1}')
-          echo "LIBOQS_SHA256=${sha256oqs}" >> sha_values.env
+          LIBOQS_SHA256="$(sha256sum /tmp/liboqs.tar.gz | awk '{print $1}')"
+          echo "LIBOQS_VERSION=${LIBOQS_VERSION}" >> sha_values.env
+          echo "LIBOQS_SHA256=${LIBOQS_SHA256}" >> sha_values.env
 
       - name: Compute liboqs-python SHA256
-        env:
-          LIBOQS_PY_VERSION: "0.12.0"
         run: |
+          set -e
+          LIBOQS_PY_VERSION="0.12.0"
           curl -fsSL -o /tmp/liboqs-python.tar.gz \
             "https://github.com/open-quantum-safe/liboqs-python/archive/refs/tags/${LIBOQS_PY_VERSION}.tar.gz"
-          sha256oqspython=$(sha256sum /tmp/liboqs-python.tar.gz | awk '{print $1}')
-          echo "LIBOQSPYTHON_SHA256=${sha256oqspython}" >> sha_values.env
+          LIBOQS_PY_SHA256="$(sha256sum /tmp/liboqs-python.tar.gz | awk '{print $1}')"
+          echo "LIBOQS_PY_VERSION=${LIBOQS_PY_VERSION}" >> sha_values.env
+          echo "LIBOQS_PY_SHA256=${LIBOQS_PY_SHA256}" >> sha_values.env
 
       - name: Prepend SHAs into requirements.txt
         run: |
-          source sha_values.env
+          set -e
+          . sha_values.env
           {
-            echo "# liboqs_version=0.14.0"
+            echo "# liboqs_version=${LIBOQS_VERSION}"
             echo "# liboqs_tarball_sha256=${LIBOQS_SHA256}"
-            echo "# liboqs-python_version=0.12.0"
-            echo "# liboqs-python_tarball_sha256=${LIBOQSPYTHON_SHA256}"
+            echo "# liboqs_python_version=${LIBOQS_PY_VERSION}"
+            echo "# liboqs_python_tarball_sha256=${LIBOQS_PY_SHA256}"
+            echo "# generated_by=github_actions_pip_compile"
             echo
             cat requirements.txt
-          } > requirements_with_shas.txt
-          mv requirements_with_shas.txt requirements.txt
+          } > requirements.tmp
+          mv requirements.tmp requirements.txt
 
-      - name: Upload artifact
+      - name: Upload locked requirements.txt artifact
         uses: actions/upload-artifact@v4
         with:
           name: requirements-locked-with-shas
           path: requirements.txt
+          retention-days: 30
