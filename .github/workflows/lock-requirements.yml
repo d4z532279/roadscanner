@@ -1,15 +1,18 @@
-name: Lock requirements + liboqs SHA256s
+name: Lock requirements + liboqs SHA256s + PQ authenticity (Dilithium)
 
 on:
   workflow_dispatch:
   push:
     paths:
       - requirements.in
+      - ci/pq_pubkey.b64
+      - .github/workflows/lock-requirements-and-pq.yml
 
 jobs:
   lock:
     runs-on: ubuntu-latest
 
+    # Use slim container like your build environment
     container:
       image: python:3.12-slim
 
@@ -24,10 +27,15 @@ jobs:
           apt-get install -y --no-install-recommends \
             curl \
             ca-certificates \
-            coreutils
+            coreutils \
+            cmake \
+            ninja-build \
+            build-essential \
+            pkg-config \
+            git
           rm -rf /var/lib/apt/lists/*
 
-      - name: Install pip-tools
+      - name: Upgrade pip + install pip-tools
         run: |
           set -e
           python -m pip install --upgrade pip
@@ -42,37 +50,157 @@ jobs:
             --output-file requirements.txt \
             requirements.in
 
-      - name: Compute liboqs SHA256
+      # ------------------------------------------------------------
+      # Compute SHA256s for pinned tarballs (integrity pinning)
+      # ------------------------------------------------------------
+      - name: Compute liboqs SHA256 (release tarball)
         run: |
           set -e
           LIBOQS_VERSION="0.14.0"
-          curl -fsSL -o /tmp/liboqs.tar.gz \
-            "https://github.com/open-quantum-safe/liboqs/archive/refs/tags/${LIBOQS_VERSION}.tar.gz"
+          LIBOQS_URL="https://github.com/open-quantum-safe/liboqs/archive/refs/tags/${LIBOQS_VERSION}.tar.gz"
+
+          curl -fsSL -o /tmp/liboqs.tar.gz "${LIBOQS_URL}"
           LIBOQS_SHA256="$(sha256sum /tmp/liboqs.tar.gz | awk '{print $1}')"
 
           echo "LIBOQS_VERSION=${LIBOQS_VERSION}" >> "$GITHUB_ENV"
+          echo "LIBOQS_URL=${LIBOQS_URL}" >> "$GITHUB_ENV"
           echo "LIBOQS_SHA256=${LIBOQS_SHA256}" >> "$GITHUB_ENV"
 
-      - name: Compute liboqs-python SHA256
+      - name: Compute liboqs-python SHA256 (release tarball)
         run: |
           set -e
           LIBOQS_PY_VERSION="0.12.0"
-          curl -fsSL -o /tmp/liboqs-python.tar.gz \
-            "https://github.com/open-quantum-safe/liboqs-python/archive/refs/tags/${LIBOQS_PY_VERSION}.tar.gz"
+          LIBOQS_PY_URL="https://github.com/open-quantum-safe/liboqs-python/archive/refs/tags/${LIBOQS_PY_VERSION}.tar.gz"
+
+          curl -fsSL -o /tmp/liboqs-python.tar.gz "${LIBOQS_PY_URL}"
           LIBOQS_PY_SHA256="$(sha256sum /tmp/liboqs-python.tar.gz | awk '{print $1}')"
 
           echo "LIBOQS_PY_VERSION=${LIBOQS_PY_VERSION}" >> "$GITHUB_ENV"
+          echo "LIBOQS_PY_URL=${LIBOQS_PY_URL}" >> "$GITHUB_ENV"
           echo "LIBOQS_PY_SHA256=${LIBOQS_PY_SHA256}" >> "$GITHUB_ENV"
 
-      - name: Prepend SHAs into requirements.txt
+      # ------------------------------------------------------------
+      # Build + install liboqs (verified) and liboqs-python (verified)
+      # so we can create PQ signatures inside CI.
+      # ------------------------------------------------------------
+      - name: Install liboqs (SHA256 verified)
+        run: |
+          set -e
+          curl -fsSL -o /tmp/liboqs.tar.gz "${LIBOQS_URL}"
+          echo "${LIBOQS_SHA256}  /tmp/liboqs.tar.gz" | sha256sum -c -
+
+          mkdir -p /tmp/liboqs-src
+          tar -xzf /tmp/liboqs.tar.gz -C /tmp/liboqs-src --strip-components=1
+
+          cmake -S /tmp/liboqs-src -B /tmp/liboqs-src/build \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DBUILD_SHARED_LIBS=ON \
+            -DOQS_USE_OPENSSL=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -G Ninja
+          cmake --build /tmp/liboqs-src/build --parallel
+          cmake --install /tmp/liboqs-src/build
+          ldconfig
+
+          rm -rf /tmp/liboqs.tar.gz /tmp/liboqs-src
+
+      - name: Install liboqs-python (SHA256 verified)
+        run: |
+          set -e
+          curl -fsSL -o /tmp/liboqs-python.tar.gz "${LIBOQS_PY_URL}"
+          echo "${LIBOQS_PY_SHA256}  /tmp/liboqs-python.tar.gz" | sha256sum -c -
+
+          mkdir -p /tmp/liboqs-python-src
+          tar -xzf /tmp/liboqs-python.tar.gz -C /tmp/liboqs-python-src --strip-components=1
+
+          # Install the wrapper (builds against liboqs already installed)
+          pip install /tmp/liboqs-python-src
+
+          rm -rf /tmp/liboqs-python.tar.gz /tmp/liboqs-python-src
+
+      # ------------------------------------------------------------
+      # PQ Authenticity:
+      # Sign the SHA256 digests using a PQ signature algorithm (Dilithium)
+      # and verify with the committed public key (fail-closed).
+      #
+      # You must set repo secret: PQSIG_PRIVKEY_B64
+      # You must commit: ci/pq_pubkey.b64
+      # ------------------------------------------------------------
+      - name: PQ-sign + verify tarball digests (Dilithium2)
+        env:
+          PQSIG_PRIVKEY_B64: ${{ secrets.PQSIG_PRIVKEY_B64 }}
+        run: |
+          set -e
+          python - <<'PY'
+          import base64, os, sys
+          import oqs
+
+          alg = "Dilithium2"
+
+          priv_b64 = os.environ.get("PQSIG_PRIVKEY_B64", "").strip()
+          if not priv_b64:
+              print("ERROR: Missing secret PQSIG_PRIVKEY_B64", file=sys.stderr)
+              sys.exit(2)
+
+          priv = base64.b64decode(priv_b64)
+
+          pub_path = "ci/pq_pubkey.b64"
+          if not os.path.exists(pub_path):
+              print(f"ERROR: Missing {pub_path} (commit your public key)", file=sys.stderr)
+              sys.exit(3)
+
+          with open(pub_path, "rb") as f:
+              pub = base64.b64decode(f.read().strip())
+
+          # sign SHA256 digests (as raw bytes) for each tarball
+          targets = {
+              "liboqs": bytes.fromhex(os.environ["LIBOQS_SHA256"]),
+              "liboqs_python": bytes.fromhex(os.environ["LIBOQS_PY_SHA256"]),
+          }
+
+          sigs_b64 = {}
+
+          with oqs.Signature(alg, secret_key=priv) as signer:
+              for name, digest in targets.items():
+                  sig = signer.sign(digest)
+                  sigs_b64[name] = base64.b64encode(sig).decode()
+
+          # verify fail-closed
+          with oqs.Signature(alg) as verifier:
+              for name, digest in targets.items():
+                  sig = base64.b64decode(sigs_b64[name])
+                  ok = verifier.verify(digest, sig, pub)
+                  if not ok:
+                      print(f"ERROR: PQ signature verification FAILED for {name}", file=sys.stderr)
+                      sys.exit(4)
+
+          # export into GitHub env for later header injection
+          ghe = os.environ["GITHUB_ENV"]
+          with open(ghe, "a", encoding="utf-8") as f:
+              f.write(f"PQSIG_ALG={alg}\n")
+              f.write(f"LIBOQS_PQSIG_B64={sigs_b64['liboqs']}\n")
+              f.write(f"LIBOQSPY_PQSIG_B64={sigs_b64['liboqs_python']}\n")
+
+          print("OK: PQ signatures created + verified (fail-closed).")
+          PY
+
+      # ------------------------------------------------------------
+      # Prepend provenance header into requirements.txt
+      # ------------------------------------------------------------
+      - name: Prepend SHAs + PQ signatures into requirements.txt
         run: |
           set -e
           {
             echo "# liboqs_version=${LIBOQS_VERSION}"
             echo "# liboqs_tarball_sha256=${LIBOQS_SHA256}"
+            echo "# liboqs_tarball_url=${LIBOQS_URL}"
             echo "# liboqs_python_version=${LIBOQS_PY_VERSION}"
             echo "# liboqs_python_tarball_sha256=${LIBOQS_PY_SHA256}"
-            echo "# generated_by=github_actions_pip_compile"
+            echo "# liboqs_python_tarball_url=${LIBOQS_PY_URL}"
+            echo "# pq_signature_alg=${PQSIG_ALG}"
+            echo "# liboqs_sha256_pqsig_b64=${LIBOQS_PQSIG_B64}"
+            echo "# liboqs_python_sha256_pqsig_b64=${LIBOQSPY_PQSIG_B64}"
+            echo "# generated_by=github_actions_pip_compile_pq_authenticity"
             echo
             cat requirements.txt
           } > requirements.tmp
@@ -81,6 +209,7 @@ jobs:
       - name: Upload locked requirements.txt artifact
         uses: actions/upload-artifact@v4
         with:
-          name: requirements-locked-with-shas
+          name: requirements-locked-with-shas-and-pq-sigs
           path: requirements.txt
           retention-days: 30
+```0
