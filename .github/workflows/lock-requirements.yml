@@ -1,4 +1,3 @@
-
 name: Lock requirements + PQ-sign lock manifest (no wheelhouse)
 
 on:
@@ -80,9 +79,9 @@ jobs:
       - name: Install liboqs-python (oqs module)
         run: |
           set -euo pipefail
-          # Use a liboqs-python version that matches your liboqs install.
-          # If you're on liboqs 0.14.0, prefer liboqs-python 0.14.x.
-          pip install "liboqs-python==0.14.0"
+          # Fixed version (PyPI only has 0.14.1)
+          pip install "liboqs-python==0.14.1"
+          python -c "import oqs; print('oqs ready, version OK')"
 
       - name: Create canonical lock manifest + PQ-sign it (Dilithium2)
         run: |
@@ -100,16 +99,10 @@ jobs:
               print("missing requirements.txt", file=sys.stderr)
               sys.exit(2)
 
-          # Canonicalize by extracting each requirement block and normalizing whitespace.
-          # We sign a canonical JSON containing:
-          # - sha256 of full requirements.txt
-          # - parsed top-level pinned packages (best-effort)
           raw = open(req_path, "rb").read()
           req_sha256 = hashlib.sha256(raw).hexdigest()
-
           text = raw.decode("utf-8", errors="replace").splitlines()
 
-          # Capture pinned packages in the main lock (lines like "foo==1.2.3 \")
           pkg_re = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)")
           pinned = []
           for line in text:
@@ -138,7 +131,6 @@ jobs:
           open("pq/lock.manifest.pqsig", "wb").write(sig)
           open("pq/pq_pubkey.b64", "w", encoding="utf-8").write(base64.b64encode(pub).decode() + "\n")
 
-          # quick self-check
           pub2 = base64.b64decode(open("pq/pq_pubkey.b64","r").read().strip())
           with oqs.Signature(ALG) as v:
               ok = v.verify(canonical, sig, pub2)
