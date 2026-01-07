@@ -1,130 +1,118 @@
-
-
-
-from __future__ import annotations 
+from __future__ import annotations
+import asyncio
+import base64
+import hashlib
+import hmac
+import itertools
+import json
 import logging
-import httpx
-import sqlite3
-import psutil
-from flask import (
-    Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, make_response, Response, stream_with_context)
-from flask_wtf import FlaskForm, CSRFProtect
-from flask_wtf.csrf import generate_csrf
-from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
-from wtforms.validators import DataRequired, Length
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.backends import default_backend
-
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-from argon2.low_level import Type
-from datetime import timedelta, datetime
-from markdown2 import markdown
-import bleach
-import geonamescache
+import math
+import os
 import random
 import re
-import base64
-import math
+import secrets
+import sqlite3
+import string
+import sys
 import threading
 import time
-import hmac
-import hashlib
-import secrets
-from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, cast
 import uuid
-import asyncio
-import sys
+import zlib as _zlib
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
+    cast,
+)
+try:
+    import fcntl  # type: ignore
+except ImportError:
+    fcntl = None
+import bleach
+import colorsys
+import geonamescache
+import httpx
+import psutil
+import numpy as np
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from argon2.low_level import Type as ArgonType, hash_secret_raw
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from flask import (
+    Flask,
+    Response,
+    flash,
+    jsonify,
+    make_response,
+    redirect,
+    render_template_string,
+    request,
+    session,
+    stream_with_context,
+    url_for,
+)
+from flask.sessions import SecureCookieSessionInterface
+from flask.json.tag import TaggedJSONSerializer
+from flask_wtf import CSRFProtect, FlaskForm
+from flask_wtf.csrf import generate_csrf, validate_csrf
+from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
+from markdown2 import markdown
+from numpy.random import Generator, PCG64DXSM
+from werkzeug.middleware.proxy_fix import ProxyFix
+from wtforms import (
+    PasswordField,
+    SelectField,
+    StringField,
+    SubmitField,
+    TextAreaField,
+)
+from wtforms.validators import DataRequired, Length, ValidationError
 try:
     import pennylane as qml
     from pennylane import numpy as pnp
-except Exception:
+except Exception:  # pragma: no cover
     qml = None
     pnp = None
-import numpy as np
-from pathlib import Path
-import os
-import json
-import string
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.hashes import SHA3_512
-from argon2.low_level import hash_secret_raw, Type as ArgonType
-from numpy.random import Generator, PCG64DXSM
-import itertools
-import colorsys
-import os
-import json
-import time
-import bleach
-import logging
-import asyncio
-import numpy as np
-from typing import Optional, Mapping, Any, Tuple
 
-import pennylane 
-import random
-import asyncio
-from typing import Optional
-from pennylane import numpy as pnp
-
-from flask import request, session, redirect, url_for, render_template_string, jsonify
-from flask_wtf.csrf import generate_csrf, validate_csrf
-from wtforms.validators import ValidationError
-import sqlite3
-from dataclasses import dataclass
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
-from collections import deque
-from flask.sessions import SecureCookieSessionInterface
-from flask.json.tag  import TaggedJSONSerializer
-from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
-import zlib as _zlib 
 try:
-    import zstandard as zstd  
+    import zstandard as zstd
     _HAS_ZSTD = True
-except Exception:
-    zstd = None  
+except Exception:  # pragma: no cover
+    zstd = None
     _HAS_ZSTD = False
 
 try:
-    from typing import TypedDict
-except ImportError:
-    from typing_extensions import TypedDict
-
-try:
-    import oqs as _oqs  
-    oqs = cast(Any, _oqs)  
-except Exception:
+    import oqs as _oqs
+    oqs = cast(Any, _oqs)  # type: ignore
+except Exception:  # pragma: no cover
     oqs = cast(Any, None)
-
-from werkzeug.middleware.proxy_fix import ProxyFix
-try:
-    import fcntl  
-except Exception:
-    fcntl = None
 class SealedCache(TypedDict, total=False):
     x25519_priv_raw: bytes
     pq_priv_raw: Optional[bytes]
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
-try:
-    import numpy as np
-except Exception:
-    np = None
-
-
-import geonamescache
-
 
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
 US_STATES_DICT = geonames.get_us_states()         
 COUNTRIES = geonames.get_countries()              
-
-
 US_STATES_BY_ABBREV = {}
 for state_name, state_info in US_STATES_DICT.items():
     if isinstance(state_info, dict):
@@ -137,14 +125,10 @@ logger.setLevel(logging.DEBUG)
 STRICT_PQ2_ONLY = True
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.DEBUG)
-
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
-
-
 logger.addHandler(console_handler)
-
 app = Flask(__name__)
 
 class _StartupOnceMiddleware:
@@ -168,8 +152,6 @@ class _StartupOnceMiddleware:
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 app.wsgi_app = _StartupOnceMiddleware(app.wsgi_app)
-
-
 SECRET_KEY = os.getenv("INVITE_CODE_SECRET_KEY")
 if not SECRET_KEY:
     raise ValueError(
@@ -475,9 +457,6 @@ def get_very_complex_random_interval():
 SESSION_KEY_ROTATION_ENABLED = str(os.getenv("QRS_ROTATE_SESSION_KEY", "1")).lower() not in ("0", "false", "no", "off")
 SESSION_KEY_ROTATION_PERIOD_SECONDS = int(os.getenv("QRS_SESSION_KEY_ROTATION_PERIOD_SECONDS", "1800"))  # 30 minutes
 SESSION_KEY_ROTATION_LOOKBACK = int(os.getenv("QRS_SESSION_KEY_ROTATION_LOOKBACK", "8"))  # current + previous keys
-
-
-
 _LAST_SESSION_KEY_WINDOW: int | None = None
 _SESSION_KEY_ROTATION_LOG_LOCK = threading.Lock()
 
@@ -491,13 +470,11 @@ def _log_session_key_rotation(window: int, current_key: bytes) -> None:
         if _LAST_SESSION_KEY_WINDOW == window:
             return
         _LAST_SESSION_KEY_WINDOW = window
-
     try:
         start_ts = window * SESSION_KEY_ROTATION_PERIOD_SECONDS
         start_utc = datetime.utcfromtimestamp(start_ts).isoformat() + "Z"
     except Exception:
         start_utc = "<unknown>"
-
     
     fp = hashlib.sha256(current_key).hexdigest()[:12]
     logger.info(
@@ -523,7 +500,6 @@ def _require_secret_bytes(value, *, name: str = "SECRET_KEY", env_hint: str = "I
         raise RuntimeError(f"{name} is empty. Provide a strong secret via the {env_hint} environment variable.")
     return value
 
-
 def _hmac_derive(base, label: bytes, window: int | None = None, out_len: int = 32) -> bytes:
     base_b = _require_secret_bytes(base, name="HMAC base secret")
     msg = label if window is None else (label + b":" + str(window).encode("ascii"))
@@ -537,7 +513,6 @@ def _hmac_derive(base, label: bytes, window: int | None = None, out_len: int = 3
         ctr += 1
         out.extend(hmac.new(base_b, msg + b"#" + str(ctr).encode("ascii"), hashlib.sha256).digest())
     return bytes(out[:out_len])
-
 
 def get_session_signing_keys(app) -> list[bytes]:
     base = getattr(app, "secret_key", None) or app.config.get("SECRET_KEY")
@@ -557,7 +532,6 @@ def get_session_signing_keys(app) -> list[bytes]:
     for i in range(1, n):
         keys.append(_hmac_derive(base_b, b"flask-session-signing-v1", window=(w - i), out_len=32))
     return keys
-
 
 def get_csrf_signing_key(app) -> bytes:
     base = getattr(app, "secret_key", None) or app.config.get("SECRET_KEY")
@@ -633,17 +607,13 @@ class MultiKeySessionInterface(SecureCookieSessionInterface):
             samesite=samesite,
         )
 
-
 app.session_interface = MultiKeySessionInterface()
-
 BASE_DIR = Path(__file__).parent.resolve()
 RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
-
 config_lock = threading.Lock()
 DB_FILE = Path('/var/data') / 'secure_data.db'
 EXPIRATION_HOURS = 65
-
 app.config.update(SESSION_COOKIE_SECURE=True,
                   SESSION_COOKIE_HTTPONLY=True,
                   SESSION_COOKIE_SAMESITE='Strict',
@@ -686,7 +656,6 @@ class KeyManager:
     _sig_priv_enc: Optional[bytes] = None
     sealed_store: Optional["SealedStore"] = None
    
-
     def _oqs_kem_name(self) -> Optional[str]: ...
     def _load_or_create_hybrid_keys(self) -> None: ...
     def _decrypt_x25519_priv(self) -> x25519.X25519PrivateKey: ...
@@ -740,11 +709,8 @@ MAGIC_PQ2_PREFIX = "PQ2."
 HYBRID_ALG_ID    = "HY1"  
 WRAP_INFO        = b"QRS|hybrid-wrap|v1"
 DATA_INFO        = b"QRS|data-aesgcm|v1"
-
-
 COMPRESS_MIN   = int(os.getenv("QRS_COMPRESS_MIN", "512"))    
 ENV_CAP_BYTES  = int(os.getenv("QRS_ENV_CAP_BYTES", "131072"))  
-
 
 POLICY = {
     "min_env_version": "QRS2",
@@ -759,7 +725,6 @@ SIG_ALG_IDS = {
     "Dilithium3": ("Dilithium3", "MLD3"),
     "Ed25519": ("Ed25519", "ED25"),
 }
-
 
 def b64e(b: bytes) -> str: return base64.b64encode(b).decode("utf-8")
 def b64d(s: str) -> bytes: return base64.b64decode(s.encode("utf-8"))
@@ -813,23 +778,13 @@ def _rgb01_to_hex(r,g,b):
 
 def _approx_oklch_from_rgb(r: float, g: float, b: float) -> tuple[float, float, float]:
 
-
     r = 0.0 if r < 0.0 else 1.0 if r > 1.0 else r
     g = 0.0 if g < 0.0 else 1.0 if g > 1.0 else g
     b = 0.0 if b < 0.0 else 1.0 if b > 1.0 else b
-
     hue_hls, light_hls, sat_hls = colorsys.rgb_to_hls(r, g, b)
-
-
     luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
     L = 0.6 * light_hls + 0.4 * luma
-
-
     C = sat_hls * 0.37
-
-
     H = (hue_hls * 360.0) % 360.0
 
     return (round(L, 4), round(C, 4), round(H, 2))
@@ -946,7 +901,6 @@ class ColorSync:
             h /= 6
         return int(h * 360), int(s * 100), int(l * 100)
 
-
 colorsync = ColorSync()
 
 def _gf256_mul(a: int, b: int) -> int:
@@ -960,7 +914,6 @@ def _gf256_mul(a: int, b: int) -> int:
             a ^= 0x1B
         b >>= 1
     return p
-
 
 def _gf256_pow(a: int, e: int) -> int:
     x = 1
@@ -976,7 +929,6 @@ def _gf256_inv(a: int) -> int:
     if a == 0:
         raise ZeroDivisionError
     return _gf256_pow(a, 254)
-
 
 def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
     if len(shares) < t:
@@ -1002,14 +954,10 @@ def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
 
     return bytes(out)
 
-
 SEALED_DIR   = Path("./sealed_store")
 SEALED_FILE  = SEALED_DIR / "sealed.json.enc"
 SEALED_VER   = "SS1"
 SHARDS_ENV   = "QRS_SHARDS_JSON"
-
-
-
 @dataclass(frozen=True, slots=True)   
 class SealedRecord:
     v: str
@@ -1020,7 +968,6 @@ class SealedRecord:
     x25519_priv: str
     pq_priv: str
     sig_priv: str
-
 
 class SealedStore:
     def __init__(self, km: "KeyManager"):
@@ -1151,14 +1098,11 @@ def _try(f: Callable[[], Any]) -> bool:
     except Exception:
         return False
 
-
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
 def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     
-    cache = getattr(self, "_sealed_cache", None)
-
-    
+    cache = getattr(self, "_sealed_cache", None)   
     x_pub_b   = _b64get(ENV_X25519_PUB_B64, required=False)
     x_privenc = _b64get(ENV_X25519_PRIV_ENC_B64, required=False)
 
@@ -1178,26 +1122,20 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
     
-    self._x25519_priv_enc = x_privenc or b""
-
-    
+    self._x25519_priv_enc = x_privenc or b""    
     self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
     if not self._pq_alg_name and cache and cache.get("kem_alg"):
         self._pq_alg_name = str(cache["kem_alg"]) or None
 
     pq_pub_b   = _b64get(ENV_PQ_PUB_B64, required=False)
-    pq_privenc = _b64get(ENV_PQ_PRIV_ENC_B64, required=False)
-
-    
+    pq_privenc = _b64get(ENV_PQ_PRIV_ENC_B64, required=False)  
     self.pq_pub       = pq_pub_b or None
     self._pq_priv_enc = pq_privenc or None
-
     
     if STRICT_PQ2_ONLY:
         have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
         if not (self._pq_alg_name and self.pq_pub and have_priv):
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
-
     
     logger.debug(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
@@ -1228,8 +1166,7 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
-
-    
+   
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1245,7 +1182,6 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     aes = AESGCM(kek)
     n, ct = pq_enc[:12], pq_enc[12:]
     return aes.decrypt(n, ct, b"pqkem")
-
 
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
    
@@ -1285,7 +1221,6 @@ def _oqs_sig_name() -> Optional[str]:
             continue
     return None
 
-
 def _km_load_or_create_signing(self: "KeyManager") -> None:
     
     cache = getattr(self, "_sealed_cache", None)
@@ -1318,7 +1253,6 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
                 pub = pub_cache
                 enc = enc or b""
                 have_priv = True
-
     
     if not (alg and pub and have_priv):
         passphrase = os.getenv(self.passphrase_env_var) or ""
@@ -1372,7 +1306,6 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
     if STRICT_PQ2_ONLY and not (self.sig_alg_name or "").startswith(("ML-DSA", "Dilithium")):
         raise RuntimeError("Strict PQ2 mode: ML-DSA (Dilithium) signature required in env.")
 
-
 def _km_sign(self, data: bytes) -> bytes:
     if (getattr(self, "sig_alg_name", "") or "").startswith("ML-DSA"):
         if oqs is None:
@@ -1399,7 +1332,6 @@ def _km_verify(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool:
     except Exception:
         return False
 
-
 _KM = cast(Any, KeyManager)
 _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
@@ -1409,10 +1341,7 @@ _KM._load_or_create_signing     = _km_load_or_create_signing
 _KM._decrypt_sig_priv           = _km_decrypt_sig_priv 
 _KM.sign_blob                   = _km_sign
 _KM.verify_blob                 = _km_verify
-
-
 HD_FILE = Path("./sealed_store/hd_epoch.json")
-
 
 def hd_get_epoch() -> int:
     try:
@@ -1421,7 +1350,6 @@ def hd_get_epoch() -> int:
     except Exception:
         pass
     return 1
-
 
 def hd_rotate_epoch() -> int:
     ep = hd_get_epoch() + 1
@@ -1434,15 +1362,12 @@ def hd_rotate_epoch() -> int:
         pass
     return ep
 
-
 def _rootk() -> bytes:
     return hkdf_sha3(encryption_key, info=b"QRS|rootk|v1", length=32)
-
 
 def derive_domain_key(domain: str, field: str, epoch: int) -> bytes:
     info = f"QRS|dom|{domain}|{field}|epoch={epoch}".encode()
     return hkdf_sha3(_rootk(), info=info, length=32)
-
 
 def build_hd_ctx(domain: str, field: str, rid: int | None = None) -> dict:
     return {
@@ -1451,7 +1376,6 @@ def build_hd_ctx(domain: str, field: str, rid: int | None = None) -> dict:
         "epoch": hd_get_epoch(),
         "rid": int(rid or 0),
     }
-
 
 class DecryptionGuard:
     def __init__(self, capacity: int = 40, refill_per_min: int = 20) -> None:
@@ -1588,7 +1512,6 @@ class AuditTrail:
             logger.error(f"audit tail failed: {e}", exc_info=True)
         return out
 
-
 bootstrap_env_keys(
     strict_pq2=STRICT_PQ2_ONLY,
     echo_exports=bool(int(os.getenv("QRS_BOOTSTRAP_SHOW","0")))
@@ -1600,14 +1523,12 @@ encryption_key = key_manager.get_key()
 key_manager._sealed_cache = None
 key_manager.sealed_store = SealedStore(key_manager)
 
-
 if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
     key_manager._load_or_create_hybrid_keys()
     key_manager._load_or_create_signing()
     key_manager.sealed_store.save_from_current_keys()
 if key_manager.sealed_store.exists():
     key_manager.sealed_store.load_into_km()
-
 
 key_manager._load_or_create_hybrid_keys()
 key_manager._load_or_create_signing()
@@ -1629,7 +1550,6 @@ key_manager._load_or_create_signing()
 
 audit = AuditTrail(key_manager)
 audit.append("boot", {"sealed_loaded": bool(getattr(key_manager, "_sealed_cache", None))})
-
 
 def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     try:
@@ -1643,7 +1563,6 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
         data_nonce = secrets.token_bytes(12)
         data_ct = AESGCM(dek).encrypt(data_nonce, pt_comp, None)
 
-
         if STRICT_PQ2_ONLY and not (key_manager._pq_alg_name and getattr(key_manager, "pq_pub", None)):
             raise RuntimeError("Strict PQ2 mode requires ML-KEM; liboqs and PQ KEM keys must be present.")
 
@@ -1651,13 +1570,11 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
         if not x_pub:
             raise RuntimeError("x25519 public key not initialized (used alongside PQ KEM in hybrid wrap)")
 
-
         eph_priv = x25519.X25519PrivateKey.generate()
         eph_pub = eph_priv.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
         ss_x = eph_priv.exchange(x25519.X25519PublicKey.from_public_bytes(x_pub))
-
 
         pq_ct: bytes = b""
         ss_pq: bytes = b""
@@ -1669,7 +1586,6 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: PQ KEM public key not available.")
 
-
         col = colorsync.sample()
         col_info = json.dumps(
             {
@@ -1680,7 +1596,6 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
             },
             separators=(",", ":"),
         ).encode()
-
 
         hd_ctx: Optional[dict[str, Any]] = None
         dk: bytes = b""
@@ -1695,12 +1610,10 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
                 "rid": int(ctx.get("rid", 0)),
             }
 
-
         wrap_info = WRAP_INFO + b"|" + col_info + (b"|HD" if hd_ctx else b"")
         wrap_key = hkdf_sha3(ss_x + ss_pq + dk, info=wrap_info, length=32)
         wrap_nonce = secrets.token_bytes(12)
         dek_wrapped = AESGCM(wrap_key).encrypt(wrap_nonce, dek, None)
-
 
         env: dict[str, Any] = {
             "v": "QRS2",
@@ -1777,8 +1690,6 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
         logger.error(f"PQ2 encrypt failed: {e}", exc_info=True)
         return None
 
-
-
 def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
     try:
 
@@ -1790,7 +1701,6 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
 
             if bool(POLICY.get("require_sig_on_pq2", False)) and "sig" not in env:
                 return None
-
 
             if STRICT_PQ2_ONLY and not env.get("pq_alg"):
                 logger.warning("Strict PQ2 mode: envelope missing PQ KEM.")
@@ -1828,7 +1738,6 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
             if km_sig_pub is None or not sig_pub or _fp8(sig_pub) != _fp8(km_sig_pub):
                 return None
 
-
             pq_ct       = b64d(cast(str, env["pq_ct"])) if env.get("pq_ct") else b""
             eph_pub     = b64d(cast(str, env["x_ephemeral_pub"]))
             wrap_nonce  = b64d(cast(str, env["wrap_nonce"]))
@@ -1838,9 +1747,7 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
 
 
             x_priv = key_manager._decrypt_x25519_priv()
-            ss_x = x_priv.exchange(x25519.X25519PublicKey.from_public_bytes(eph_pub))
-
-
+            ss_x = x_priv.exchange(x25519.X25519PublicKey.from_public_bytes(eph_pub)
             ss_pq = b""
             if env.get("pq_alg") and oqs is not None and key_manager._pq_alg_name:
                 oqs_mod = cast(Any, oqs)
@@ -1851,8 +1758,6 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
                     if not dec_guard.register_failure():
                         logger.error("Strict PQ2: missing PQ decapsulation capability.")
                     return None
-
-
             col_meta = cast(dict[str, Any], env.get("col_meta") or {})
             col_info = json.dumps(
                 {
@@ -1917,7 +1822,6 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
         logger.error(f"decrypt_data failed: {e}", exc_info=True)
         return None
 
-
 def _gen_overwrite_patterns(passes: int):
     charset = string.ascii_letters + string.digits + string.punctuation
     patterns = [
@@ -1954,10 +1858,8 @@ def _values_for_types(col_types_ordered: list[tuple[str, str]], pattern_func):
 
 dev = qml.device("default.qubit", wires=5)
 
-
 def get_cpu_ram_usage():
     return psutil.cpu_percent(), psutil.virtual_memory().percent
-
 
 @qml.qnode(dev)
 def quantum_hazard_scan(cpu_usage, ram_usage):
@@ -3082,11 +2984,6 @@ def admin_blog_api_delete():
 
     return jsonify(ok=True)
 
-
-# -----------------------------
-# Blog backup / restore (JSON) to survive container rebuilds
-# -----------------------------
-
 def _blog_backup_path() -> Path:
     p = Path(os.getenv("BLOG_BACKUP_PATH", "/var/data/blog_posts_backup.json"))
     try:
@@ -3196,7 +3093,7 @@ def restore_blog_posts_from_json(payload: dict, default_author_id: int) -> tuple
                 inserted += 1
         db.commit()
 
-    # Refresh on-disk backup after restore.
+    
     write_blog_backup_file()
     return inserted, updated
 
@@ -3328,11 +3225,6 @@ def admin_blog_backup_restore():
     inserted, updated = restore_blog_posts_from_json(payload, default_author_id=int(admin_id))
     flash(f"Restore complete. Inserted={inserted}, Updated={updated}", "success")
     return redirect(url_for("admin_blog_backup_page"))
-
-
-# -----------------------------
-# Admin: Local Llama model manager (download/encrypt/decrypt)
-# -----------------------------
 
 @app.route("/admin/local_llm", methods=["GET"])
 def admin_local_llm_page():
@@ -3553,7 +3445,6 @@ def overwrite_rate_limits_by_user(cursor, user_id: int, passes: int = 7):
         cursor.execute(sql, (*vals, user_id))
         logger.debug("Pass %d complete for rate_limits (user_id).", i)
 
-
 def overwrite_entropy_logs_by_passnum(cursor, pass_num: int, passes: int = 7):
 
     col_types = [("log","TEXT"), ("pass_num","INTEGER")]
@@ -3663,7 +3554,6 @@ def ensure_admin_from_env():
                 (admin_user, hashed, preferred_model_encrypted))
             db.commit()
             logger.debug("Admin user created from env (dynamic Argon2id).")
-
 
 def enforce_admin_presence():
 
@@ -4059,9 +3949,6 @@ EXAMPLE
 {{"harm_ratio":0.12,"label":"Clear","color":"#22d3a6","confidence":0.93,"reasons":["Visibility good","Low congestion"],"blurb":"Stay alert and maintain safe following distance."}}
 """.strip()
 
-# -----------------------------
-# LLM Providers: OpenAI / Grok / Local Llama
-# -----------------------------
 
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _OPENAI_ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
@@ -4300,7 +4187,7 @@ def _llama_one_word_from_text(text: str) -> str:
     return "Medium"
 
 def build_local_risk_prompt(scene: dict) -> str:
-    # ASCII-only prompt. One-word output required.
+    
     return (
         "You are a Road Risk Classification AI.\\n"
         "Return exactly ONE word: Low, Medium, or High.\\n"
@@ -4320,11 +4207,6 @@ def build_local_risk_prompt(scene: dict) -> str:
         "- Output one word only.\\n"
     )
 
-# -----------------------------
-# Local Llama "PQE" risk helpers
-# (System metrics + PennyLane entropic score + PUNKD chunked gen)
-# -----------------------------
-
 def _read_proc_stat() -> Optional[Tuple[int, int]]:
     try:
         with open("/proc/stat", "r") as f:
@@ -4338,7 +4220,6 @@ def _read_proc_stat() -> Optional[Tuple[int, int]]:
         return total, idle
     except Exception:
         return None
-
 
 def _cpu_percent_from_proc(sample_interval: float = 0.12) -> Optional[float]:
     t1 = _read_proc_stat()
@@ -4356,7 +4237,6 @@ def _cpu_percent_from_proc(sample_interval: float = 0.12) -> Optional[float]:
         return None
     usage = (total_delta - idle_delta) / float(total_delta)
     return max(0.0, min(1.0, usage))
-
 
 def _mem_from_proc() -> Optional[float]:
     try:
@@ -4380,7 +4260,6 @@ def _mem_from_proc() -> Optional[float]:
     except Exception:
         return None
 
-
 def _load1_from_proc(cpu_count_fallback: int = 1) -> Optional[float]:
     try:
         with open("/proc/loadavg", "r") as f:
@@ -4395,14 +4274,12 @@ def _load1_from_proc(cpu_count_fallback: int = 1) -> Optional[float]:
     except Exception:
         return None
 
-
 def _proc_count_from_proc() -> Optional[float]:
     try:
         pids = [name for name in os.listdir("/proc") if name.isdigit()]
         return max(0.0, min(1.0, len(pids) / 1000.0))
     except Exception:
         return None
-
 
 def _read_temperature() -> Optional[float]:
     temps: List[float] = []
@@ -4449,7 +4326,6 @@ def _read_temperature() -> Optional[float]:
         return max(0.0, min(1.0, norm))
     except Exception:
         return None
-
 
 def collect_system_metrics() -> Dict[str, float]:
     cpu = mem = load1 = temp = proc = None
@@ -4509,7 +4385,6 @@ def collect_system_metrics() -> Dict[str, float]:
 
     return {"cpu": cpu, "mem": mem, "load1": load1, "temp": temp, "proc": proc}
 
-
 def metrics_to_rgb(metrics: dict) -> Tuple[float, float, float]:
     cpu = metrics.get("cpu", 0.1)
     mem = metrics.get("mem", 0.1)
@@ -4528,7 +4403,6 @@ def metrics_to_rgb(metrics: dict) -> Tuple[float, float, float]:
         float(max(0.0, min(1.0, g))),
         float(max(0.0, min(1.0, b))),
     )
-
 
 def pennylane_entropic_score(rgb: Tuple[float, float, float], shots: int = 256) -> float:
     if qml is None or pnp is None:
@@ -4567,10 +4441,8 @@ def pennylane_entropic_score(rgb: Tuple[float, float, float], shots: int = 256) 
     except Exception:
         return float(0.5 * (a + b + c) / 3.0)
 
-
 def entropic_to_modifier(score: float) -> float:
     return (score - 0.5) * 0.4
-
 
 def entropic_summary_text(score: float) -> str:
     if score >= 0.75:
@@ -4581,10 +4453,8 @@ def entropic_summary_text(score: float) -> str:
         level = "low"
     return f"entropic_score={score:.3f} (level={level})"
 
-
 def _simple_tokenize(text: str) -> List[str]:
     return [t for t in re.findall(r"[A-Za-z0-9_\-]+", (text or "").lower())]
-
 
 def punkd_analyze(prompt_text: str, top_n: int = 12) -> Dict[str, float]:
     toks = _simple_tokenize(prompt_text)
@@ -4617,7 +4487,6 @@ def punkd_analyze(prompt_text: str, top_n: int = 12) -> Dict[str, float]:
         return {}
     return {k: float(v / maxv) for k, v in items}
 
-
 def punkd_apply(prompt_text: str, token_weights: Dict[str, float], profile: str = "balanced") -> Tuple[str, float]:
     if not token_weights:
         return prompt_text, 1.0
@@ -4633,7 +4502,6 @@ def punkd_apply(prompt_text: str, token_weights: Dict[str, float], profile: str 
     markers = " ".join([f"<ATTN:{t}:{round(w,2)}>" for t, w in sorted_tokens])
     patched = (prompt_text or "") + "\n\n[PUNKD_MARKERS] " + markers
     return patched, multiplier
-
 
 def chunked_generate(
     llm: "Llama",
@@ -4689,7 +4557,6 @@ def chunked_generate(
         cur_prompt = prompt + "\n\nAssistant so far:\n" + assembled + "\n\nContinue:"
 
     return assembled.strip()
-
 
 def build_road_scanner_prompt(data: dict, include_system_entropy: bool = True) -> str:
     entropy_text = "entropic_score=unknown"
@@ -4747,8 +4614,6 @@ def llama_local_predict_risk(scene: dict) -> Optional[str]:
     llm = llama_load()
     if llm is None:
         return None
-
-    # Use PQE: system metrics -> RGB -> entropic score (PennyLane when available) and PUNKD chunked generation.
     prompt = build_road_scanner_prompt(scene, include_system_entropy=True)
 
     try:
@@ -4782,7 +4647,7 @@ def llama_local_predict_risk(scene: dict) -> Optional[str]:
         return None
 
 def llama_download_model_httpx() -> tuple[bool, str]:
-    # Synchronous download to keep this simple inside Flask admin action.
+    
     if Path is None:
         return False, "path_unavailable"
     url = LLAMA_MODEL_REPO + LLAMA_MODEL_FILE
@@ -4831,7 +4696,6 @@ def _maybe_grok_client():
     )
     return _GROK_CLIENT
     
-
 def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
   
     client = _maybe_grok_client()
@@ -5009,13 +4873,10 @@ def _coerce_city_index(cities_opt: Optional[Mapping[str, Any]]) -> CityMap:
         return {str(k): v for k, v in gc.items()}
     return {}
 
-
 def _coords_valid(lat: float, lon: float) -> bool:
     return math.isfinite(lat) and -90 <= lat <= 90 and math.isfinite(lon) and -180 <= lon <= 180
 
-
 _BASE_FMT = re.compile(r'^\s*"?(?P<city>[^,"\n]+)"?\s*,\s*"?(?P<county>[^,"\n]*)"?\s*,\s*"?(?P<state>[^,"\n]+)"?\s*$')
-
 
 def _split_country(line: str) -> Tuple[str, str]:
 
@@ -5023,7 +4884,6 @@ def _split_country(line: str) -> Tuple[str, str]:
     if not m:
         return line.strip(), ""
     return line[:m.start()].strip(), m.group("country").strip().strip('"')
-
 
 def _parse_base(left: str) -> Tuple[str, str, str]:
     m = _BASE_FMT.match(left)
@@ -5033,7 +4893,6 @@ def _parse_base(left: str) -> Tuple[str, str, str]:
     county = m.group("county").strip().strip('"')
     state  = m.group("state").strip().strip('"')
     return city, county, state
-
 
 def _first_line_stripped(text: str) -> str:
     return (text or "").splitlines()[0].strip()
@@ -5082,11 +4941,6 @@ def reverse_geocode(lat: float, lon: float) -> str:
     state_name = US_STATES_BY_ABBREV.get(state_code, state_code or "Unknown State")
     return f"{city_name}, {state_name}, United States"
 
-# -----------------------------
-# Reverse geocode (online first)
-# -----------------------------
-# ASCII-only: keep source UTF-8 clean to avoid mojibake in deployments.
-# Uses OpenStreetMap Nominatim if enabled, with a small in-memory cache.
 REVGEOCODE_ONLINE_V1 = True
 
 _REVGEOCODE_CACHE: dict[tuple[int, int], tuple[float, dict]] = {}
@@ -5222,14 +5076,14 @@ def _lightbeam_sync(lat: float, lon: float) -> dict:
 
 
 class ULTIMATE_FORGE:
-    # NOTE: Keep source ASCII-only to avoid mojibake. Use \uXXXX escapes for quantum glyphs.
+    
     _forge_epoch = int(time.time() // 3600)
 
     _forge_salt = hashlib.sha3_512(
         f"{os.getpid()}{os.getppid()}{threading.active_count()}{uuid.uuid4()}".encode()
     ).digest()[:16]  # Critical fix: 16 bytes max
 
-    # Quantum symbols (runtime): Delta Psi Phi Omega nabla sqrt infinity proportional-to tensor-product
+    
     _QSYMS = "\u0394\u03A8\u03A6\u03A9\u2207\u221A\u221E\u221D\u2297"
 
     @classmethod
@@ -5268,7 +5122,6 @@ class ULTIMATE_FORGE:
         ]
         active_threat = threats[threat_level % len(threats)]
 
-        # Keep prompt stable + injection-resistant (no self-referential poison text).
         return f"""
 [QUANTUM NOISE: {quantum_noise}]
 [ENTROPY: {entropy[:64]}...]
@@ -5286,16 +5139,9 @@ Rules:
 - No extra words.
 """.strip()
 async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optional[str] = None) -> str:
-    # Reverse geocode with online-first accuracy + cross-model formatting consensus.
-    # Primary: Nominatim structured address (deterministic formatting)
-    # Secondary: LightBeamSync consensus between OpenAI and Grok (format-only, no invention)
-    # Final: offline city dataset (best-effort)
-
-    # Online reverse geocode first (fast, accurate when available).
+    
     nom_data = await reverse_geocode_nominatim(lat, lon)
     online_line = format_reverse_geocode_line(nom_data)
-
-    # Compute offline only if needed (it scans the full city list).
     offline_line = ""
     if not online_line:
         try:
@@ -5305,7 +5151,6 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
 
     base_guess = online_line or offline_line or "Unknown Location"
 
-    # Build minimal components for validation/allowlist.
     addr = (nom_data.get("address") if isinstance(nom_data, dict) else None) or {}
     if not isinstance(addr, dict):
         addr = {}
@@ -5324,7 +5169,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
 
     allow_words = _build_allowlist_from_components(components)
 
-    # Required signals (if online data exists, require country and at least one locality token).
+    
     required_words: set[str] = set()
     if online_line:
         country = addr.get("country")
@@ -5364,7 +5209,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
             if w not in allow_words:
                 return False
         if required_words:
-            # require at least one required word to appear
+            
             if not any(w in set(words) for w in required_words):
                 return False
         return True
@@ -5373,13 +5218,12 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
     if provider not in ("openai", "grok", "llama_local", None):
         provider = None
 
-    # LightBeamSync token (stable per coordinate).
+    
     lb = _lightbeam_sync(lat, lon)
     qid = (lb.get("qid25") or {})
     oklch = (lb.get("oklch") or {})
 
-    # Provide authoritative JSON (trimmed) plus parsed components. Models must not invent.
-    # Keep JSON small to reduce token use.
+    
     auth_obj = {}
     if isinstance(nom_data, dict):
         auth_obj = {
@@ -5409,7 +5253,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
         "- Prefer including street (house number + road) when present.\n"
     )
 
-    # Deterministic best-effort (used if models fail or disagree).
+    
     deterministic = base_guess
 
     async def _try_openai(p: str) -> Optional[str]:
@@ -5436,7 +5280,7 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
             return None
         return None
 
-    # Lightbeam cross-check: two independent formatters, same constraints.
+    
     openai_line = None
     grok_line = None
 
@@ -5444,24 +5288,24 @@ async def fetch_street_name_llm(lat: float, lon: float, preferred_model: Optiona
         openai_line = await _try_openai(prompt)
 
     if (provider in (None, "grok")) and os.getenv("GROK_API_KEY"):
-        # Include OpenAI suggestion as an optional hint, but still enforce "no invention" via allowlist.
+        
         p2 = prompt
         if openai_line:
             p2 = prompt + "\nOpenAI_candidate: " + openai_line + "\n"
         grok_line = await _try_grok(p2)
 
-    # If both agree, accept.
+
     if openai_line and grok_line:
         if _clean(openai_line).lower() == _clean(grok_line).lower():
             return openai_line
 
-    # If one exists, prefer the one that adds street detail beyond deterministic.
+    
     if openai_line and openai_line != deterministic:
         return openai_line
     if grok_line and grok_line != deterministic:
         return grok_line
 
-    # If we have an online deterministic answer, trust it over offline.
+    
     return deterministic
 
 
@@ -6007,7 +5851,7 @@ async def scan_debris_for_route(
         street_name = "Unknown Location"
 
     grok_prompt = f"""
-[action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
+[action]You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
 [locationreport]
 Current coordinates: Latitude {lat}, Longitude {lon}
 General Area Name: {street_name}
