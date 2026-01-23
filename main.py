@@ -6033,7 +6033,7 @@ async def scan_debris_for_route(
         street_name = "Unknown Location"
 
     grok_prompt = f"""
-[action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
+[action]You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
 [locationreport]
 Current coordinates: Latitude {lat}, Longitude {lon}
 General Area Name: {street_name}
