@@ -4480,7 +4480,7 @@ def admin_blog_backup_restore():
 # -----------------------------
 
 ## LEGACY ENDPOINT REMOVED: local LLM admin (keep code for reference but do not expose HTTP routes)
-# @app.route("/admin/local_llm", methods=["GET"])
+@app.route("/admin/local_llm", methods=["GET"])
 def admin_local_llm_page():
     guard = _require_admin()
     if guard:
