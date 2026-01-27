@@ -13,116 +13,6 @@ from wtforms.validators import DataRequired, Length
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
-
-# ================== ADMIN SETTINGS (SECURE) ==================
-def get_admin_setting(db, key: str, default: str):
-    cur = db.cursor()
-    cur.execute("SELECT value FROM admin_settings WHERE key = ?", (key,))
-    row = cur.fetchone()
-    return row[0] if row else default
-
-def set_admin_setting(db, key: str, value: str):
-    cur = db.cursor()
-    cur.execute("INSERT OR REPLACE INTO admin_settings (key, value) VALUES (?, ?)",
-                (key, value))
-
-def create_admin_settings_table():
-    with sqlite3.connect(DB_FILE) as db:
-        db.execute("""
-        CREATE TABLE IF NOT EXISTS admin_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-        """)
-        db.commit()
-# ================== END ADMIN SETTINGS ==================
-
-
-# ================== LLM ROUTER PATCH ==================
-
-# ================== DUAL LLM READINGS ==================
-def call_llm_dual(prompt: str) -> dict:
-    """Return two independent readings when enabled."""
-    out = {}
-
-    try:
-        out["grok"] = call_grok(prompt) if os.getenv("USE_GROK", "1") == "1" else None
-    except Exception as e:
-        out["grok_error"] = str(e)
-        out["grok"] = None
-
-    try:
-        out["chatgpt"] = call_chatgpt_52(prompt)
-    except Exception as e:
-        out["chatgpt_error"] = str(e)
-        out["chatgpt"] = None
-
-    return out
-# ================== END DUAL LLM READINGS ==================
-
-
-def call_llm(prompt: str) -> str:
-    """Unified LLM router (safe wrapper).
-
-    This function existed in earlier patches and is used by some routes.
-    It now delegates to the newer provider router if present, avoiding recursion.
-    """
-    prompt = str(prompt or "")
-    # Prefer the newer, featureful router if this file defines it.
-    fn = globals().get("call_provider_llm") or globals().get("route_llm") or globals().get("_call_llm")
-    if callable(fn):
-        try:
-            return fn(prompt)  # type: ignore[misc]
-        except TypeError:
-            # some routers accept (prompt, **kwargs)
-            return fn(prompt, {})  # type: ignore[misc]
-    # Minimal fallback: environment OpenAI call (best-effort).
-    try:
-        from openai import OpenAI  # type: ignore
-        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_KEY") or ""
-        if not api_key:
-            raise RuntimeError("missing OPENAI_API_KEY")
-        client = OpenAI(api_key=api_key)
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-        r = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=600,
-        )
-        return (r.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"ERROR: call_llm failed: {e}"
-
-    if os.getenv("USE_GROK", "1") == "1":
-        try:
-            return call_llm(prompt)
-        except Exception as e:
-            last_err = e
-            logger.warning(f"Grok failed, falling back to ChatGPT 5.2: {e}")
-
-    try:
-        return call_chatgpt_52(prompt)
-    except Exception as e:
-        logger.error("All LLM providers failed", exc_info=True)
-        raise RuntimeError("LLM unavailable") from e
-
-
-def call_chatgpt_52(prompt: str) -> str:
-    """ChatGPT 5.2 JSON-only call."""
-    from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    resp = client.responses.create(
-        model="gpt-5.2",
-        input=prompt,
-        response_format={"type": "json"}
-    )
-
-    return resp.output_text
-# ================== END LLM ROUTER PATCH ==================
-
-
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type
@@ -367,7 +257,139 @@ def _detect_oqs_kem() -> Optional[str]:
         except Exception:
             continue
     return None
+# ================== ADMIN SETTINGS (SECURE · PATCHED) ==================
+# Changes:
+# - Uses parameterized queries (unchanged behavior, explicit safety)
+# - Uses a hardened DB connection pattern (WAL / FK assumed configured upstream)
+# - Normalizes keys/values defensively
 
+def get_admin_setting(db: sqlite3.Connection, key: str, default: str):
+    key = str(key).strip()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT value FROM admin_settings WHERE key = ?",
+        (key,),
+    )
+    row = cur.fetchone()
+    return row[0] if row and row[0] is not None else default
+
+
+def set_admin_setting(db: sqlite3.Connection, key: str, value: str):
+    key = str(key).strip()
+    value = str(value)
+    cur = db.cursor()
+    cur.execute(
+        """
+        INSERT INTO admin_settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def create_admin_settings_table():
+    with sqlite3.connect(DB_FILE, timeout=30) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        db.commit()
+# ================== END ADMIN SETTINGS ==================
+
+
+# ================== LLM ROUTER PATCH (SECURE · NON-RECURSIVE · HTTPX-READY) ==================
+# Changes:
+# - Removes recursion bugs
+# - No globals() roulette
+# - Sanitizes prompt
+# - Supports dual-provider reads safely
+# - Designed to be backed by httpx retry client
+
+def call_llm_dual(prompt: str, client: "RetryingHTTPClient") -> dict:
+    """
+    Return two independent LLM readings when enabled.
+    Safe: no recursion, no shared mutable state.
+    """
+    prompt = clean_text(prompt, 20000)
+    out: Dict[str, Optional[str]] = {}
+
+    if os.getenv("USE_GROK", "1") == "1":
+        try:
+            out["grok"] = call_grok_httpx(prompt, client)  # async-safe wrapper
+        except Exception as e:
+            out["grok_error"] = str(e)
+            out["grok"] = None
+
+    try:
+        out["chatgpt"] = call_chatgpt_52(prompt, client)
+    except Exception as e:
+        out["chatgpt_error"] = str(e)
+        out["chatgpt"] = None
+
+    return out
+
+
+def call_llm(prompt: str, client: "RetryingHTTPClient") -> str:
+    """
+    Unified LLM router (SAFE).
+    - No recursion
+    - Deterministic fallback order
+    - Raises if all providers fail
+    """
+    prompt = clean_text(prompt, 20000)
+
+    res = call_llm_dual(prompt, client)
+
+    if res.get("chatgpt"):
+        return res["chatgpt"]  # type: ignore[return-value]
+
+    if res.get("grok"):
+        return res["grok"]  # type: ignore[return-value]
+
+    raise RuntimeError("LLM unavailable: all providers failed")
+
+
+def call_chatgpt_52(prompt: str, client: "RetryingHTTPClient") -> str:
+    """
+    ChatGPT 5.2 JSON-only call via httpx (retrying).
+    """
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+    if not api_key:
+        raise RuntimeError("missing OPENAI_API_KEY")
+
+    payload = {
+        "model": "gpt-5.2",
+        "input": prompt,
+        "response_format": {"type": "json"},
+    }
+
+    r = client.request(
+        "POST",
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+
+    # support both sync/async client usage
+    if hasattr(r, "__await__"):
+        r = asyncio.get_event_loop().run_until_complete(r)
+
+    j = r.json()
+    try:
+        return (j.get("output_text") or "").strip()
+    except Exception:
+        raise RuntimeError("Invalid OpenAI response format")
+# ================== END LLM ROUTER PATCH ==================
 def _detect_oqs_sig() -> Optional[str]:
     if oqs is None: return None
     for n in ("ML-DSA-87","ML-DSA-65","Dilithium5","Dilithium3"):
