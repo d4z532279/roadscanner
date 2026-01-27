@@ -6087,14 +6087,14 @@ def _call_llm(prompt: str, temperature: float = 0.7, model: str | None = None):
     return None
 
 ## LEGACY ENDPOINT REMOVED: theme personalization (superseded by /x dashboard)
-# @app.route("/api/theme/personalize", methods=["GET"])
+@app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
     uid = _user_id()
     seed = colorsync.sample(uid)
     return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
 
 ## LEGACY ENDPOINT REMOVED: risk API (superseded by /x dashboard)
-# @app.route("/api/risk/llm_route", methods=["POST"])
+@app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
     uid = _user_id()
     body = request.get_json(force=True, silent=True) or {}
@@ -6113,7 +6113,7 @@ def api_llm_route():
     return _attach_cookie(jsonify(data))
     
 
-# @app.get("/api/risk/llm_guess")  # legacy removed
+@app.get("/api/risk/llm_guess")  # legacy removed
 def api_llm_guess():
     """Single-shot 'guess' reading used by the home page dial(s)."""
     uid = _user_id()
@@ -6182,7 +6182,7 @@ def api_llm_guess():
     return _attach_cookie(jsonify(out))
 
 
-# @app.route("/api/risk/stream")  # legacy removed
+@app.route("/api/risk/stream")  # legacy removed
 def api_stream():
     
     uid = _user_id()
