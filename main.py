@@ -1,121 +1,115 @@
-from __future__ import annotations 
+from __future__ import annotations
+import os
+import sys
+import json
+import time
+import math
+import uuid
+import hmac
+import zlib as _zlib
+import base64
+import errno
+import random
+import string
+import secrets
+import hashlib
 import logging
+import threading
+import itertools
+import colorsys
+import asyncio
+from pathlib import Path
+from datetime import datetime, timedelta
+from collections import deque
+from dataclasses import dataclass
+from typing import (
+    Any, Dict, List, Tuple, Optional, Union,
+    Mapping, Callable, cast
+)
 import httpx
 import sqlite3
 import psutil
-from flask import (
-    Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, make_response, Response, stream_with_context)
-from flask_wtf import FlaskForm, CSRFProtect
-from flask_wtf.csrf import generate_csrf
-from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
-from wtforms.validators import DataRequired, Length
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.backends import default_backend
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-from argon2.low_level import Type
-from datetime import timedelta, datetime
-from markdown2 import markdown
+import numpy as np
 import bleach
 _bleach = bleach
+from markdown2 import markdown
 import geonamescache
-import random
-import re
-import base64
-import math
-import threading
-import time
-import hmac
-import hashlib
-import secrets
-from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, cast
-import uuid
-import asyncio
-import sys
+from flask import (
+    Flask, request, session, redirect, url_for,
+    render_template_string, jsonify, flash,
+    make_response, Response, stream_with_context
+)
+from flask.sessions import SecureCookieSessionInterface
+from flask.json.tag import TaggedJSONSerializer
+from flask_wtf import FlaskForm, CSRFProtect
+from flask_wtf.csrf import generate_csrf, validate_csrf
+from wtforms import (
+    StringField, PasswordField,
+    SubmitField, TextAreaField, SelectField
+)
+from wtforms.validators import (
+    DataRequired, Length, ValidationError
+)
+from werkzeug.middleware.proxy_fix import ProxyFix
+from itsdangerous import (
+    URLSafeTimedSerializer,
+    BadSignature,
+    BadTimeSignature
+)
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import (
+    serialization,
+    hashes
+)
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.asymmetric import (
+    x25519,
+    ed25519
+)
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from argon2.low_level import (
+    hash_secret_raw,
+    Type,
+    Type as ArgonType
+)
 try:
     import pennylane as qml
     from pennylane import numpy as pnp
 except Exception:
     qml = None
     pnp = None
-import numpy as np
-from pathlib import Path
-import os
-import json
-import string
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.hashes import SHA3_512
-from argon2.low_level import hash_secret_raw, Type as ArgonType
 from numpy.random import Generator, PCG64DXSM
-import itertools
-import colorsys
-import os
-import json
-import time
-import bleach
-import logging
-import asyncio
-import numpy as np
-from typing import Optional, Mapping, Any, Tuple
-
-import pennylane 
-import random
-import asyncio
-from typing import Optional
-from pennylane import numpy as pnp
-
-from flask import request, session, redirect, url_for, render_template_string, jsonify
-from flask_wtf.csrf import generate_csrf, validate_csrf
-from wtforms.validators import ValidationError
-import sqlite3
-from dataclasses import dataclass
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
-from collections import deque
-from flask.sessions import SecureCookieSessionInterface
-from flask.json.tag  import TaggedJSONSerializer
-from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
-import zlib as _zlib 
 try:
-    import zstandard as zstd  
+    import zstandard as zstd
     _HAS_ZSTD = True
 except Exception:
-    zstd = None  
+    zstd = None
     _HAS_ZSTD = False
-
+try:
+    import oqs as _oqs
+    oqs = cast(Any, _oqs)
+except Exception:
+    oqs = cast(Any, None)
+try:
+    import fcntl
+except Exception:
+    fcntl = None
 try:
     from typing import TypedDict
 except ImportError:
     from typing_extensions import TypedDict
 
-try:
-    import oqs as _oqs  
-    oqs = cast(Any, _oqs)  
-except Exception:
-    oqs = cast(Any, None)
-
-from werkzeug.middleware.proxy_fix import ProxyFix
-try:
-    import fcntl  
-except Exception:
-    fcntl = None
 class SealedCache(TypedDict, total=False):
     x25519_priv_raw: bytes
     pq_priv_raw: Optional[bytes]
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
-try:
-    import numpy as np
-except Exception:
-    np = None
-
-
-import geonamescache
-
-
+    
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
 US_STATES_DICT = geonames.get_us_states()         
@@ -257,139 +251,7 @@ def _detect_oqs_kem() -> Optional[str]:
         except Exception:
             continue
     return None
-# ================== ADMIN SETTINGS (SECURE · PATCHED) ==================
-# Changes:
-# - Uses parameterized queries (unchanged behavior, explicit safety)
-# - Uses a hardened DB connection pattern (WAL / FK assumed configured upstream)
-# - Normalizes keys/values defensively
 
-def get_admin_setting(db: sqlite3.Connection, key: str, default: str):
-    key = str(key).strip()
-    cur = db.cursor()
-    cur.execute(
-        "SELECT value FROM admin_settings WHERE key = ?",
-        (key,),
-    )
-    row = cur.fetchone()
-    return row[0] if row and row[0] is not None else default
-
-
-def set_admin_setting(db: sqlite3.Connection, key: str, value: str):
-    key = str(key).strip()
-    value = str(value)
-    cur = db.cursor()
-    cur.execute(
-        """
-        INSERT INTO admin_settings (key, value)
-        VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """,
-        (key, value),
-    )
-
-
-def create_admin_settings_table():
-    with sqlite3.connect(DB_FILE, timeout=30) as db:
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA foreign_keys=ON")
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS admin_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        db.commit()
-# ================== END ADMIN SETTINGS ==================
-
-
-# ================== LLM ROUTER PATCH (SECURE · NON-RECURSIVE · HTTPX-READY) ==================
-# Changes:
-# - Removes recursion bugs
-# - No globals() roulette
-# - Sanitizes prompt
-# - Supports dual-provider reads safely
-# - Designed to be backed by httpx retry client
-
-def call_llm_dual(prompt: str, client: "RetryingHTTPClient") -> dict:
-    """
-    Return two independent LLM readings when enabled.
-    Safe: no recursion, no shared mutable state.
-    """
-    prompt = clean_text(prompt, 20000)
-    out: Dict[str, Optional[str]] = {}
-
-    if os.getenv("USE_GROK", "1") == "1":
-        try:
-            out["grok"] = call_grok_httpx(prompt, client)  # async-safe wrapper
-        except Exception as e:
-            out["grok_error"] = str(e)
-            out["grok"] = None
-
-    try:
-        out["chatgpt"] = call_chatgpt_52(prompt, client)
-    except Exception as e:
-        out["chatgpt_error"] = str(e)
-        out["chatgpt"] = None
-
-    return out
-
-
-def call_llm(prompt: str, client: "RetryingHTTPClient") -> str:
-    """
-    Unified LLM router (SAFE).
-    - No recursion
-    - Deterministic fallback order
-    - Raises if all providers fail
-    """
-    prompt = clean_text(prompt, 20000)
-
-    res = call_llm_dual(prompt, client)
-
-    if res.get("chatgpt"):
-        return res["chatgpt"]  # type: ignore[return-value]
-
-    if res.get("grok"):
-        return res["grok"]  # type: ignore[return-value]
-
-    raise RuntimeError("LLM unavailable: all providers failed")
-
-
-def call_chatgpt_52(prompt: str, client: "RetryingHTTPClient") -> str:
-    """
-    ChatGPT 5.2 JSON-only call via httpx (retrying).
-    """
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
-    if not api_key:
-        raise RuntimeError("missing OPENAI_API_KEY")
-
-    payload = {
-        "model": "gpt-5.2",
-        "input": prompt,
-        "response_format": {"type": "json"},
-    }
-
-    r = client.request(
-        "POST",
-        "https://api.openai.com/v1/responses",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-    )
-
-    # support both sync/async client usage
-    if hasattr(r, "__await__"):
-        r = asyncio.get_event_loop().run_until_complete(r)
-
-    j = r.json()
-    try:
-        return (j.get("output_text") or "").strip()
-    except Exception:
-        raise RuntimeError("Invalid OpenAI response format")
-# ================== END LLM ROUTER PATCH ==================
 def _detect_oqs_sig() -> Optional[str]:
     if oqs is None: return None
     for n in ("ML-DSA-87","ML-DSA-65","Dilithium5","Dilithium3"):
@@ -2344,30 +2206,141 @@ def create_tables():
     print("Database tables created and verified successfully.")
 
 
-# -----------------------------------------------------------------------------
-# X2 SECURE PER-USER VAULT + QUANTUM CAROUSEL ENGINE (backend)
-# -----------------------------------------------------------------------------
+def get_admin_setting(db: sqlite3.Connection, key: str, default: str):
+    key = str(key).strip()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT value FROM admin_settings WHERE key = ?",
+        (key,),
+    )
+    row = cur.fetchone()
+    return row[0] if row and row[0] is not None else default
+
+def set_admin_setting(db: sqlite3.Connection, key: str, value: str):
+    key = str(key).strip()
+    value = str(value)
+    cur = db.cursor()
+    cur.execute(
+        """
+        INSERT INTO admin_settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+def create_admin_settings_table():
+    with sqlite3.connect(DB_FILE, timeout=30) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        db.commit()
+
+
+def call_llm_dual(prompt: str, client: "RetryingHTTPClient") -> dict:
+    """
+    Return two independent LLM readings when enabled.
+    Safe: no recursion, no shared mutable state.
+    """
+    prompt = clean_text(prompt, 20000)
+    out: Dict[str, Optional[str]] = {}
+
+    if os.getenv("USE_GROK", "1") == "1":
+        try:
+            out["grok"] = call_grok_httpx(prompt, client)  # async-safe wrapper
+        except Exception as e:
+            out["grok_error"] = str(e)
+            out["grok"] = None
+
+    try:
+        out["chatgpt"] = call_chatgpt_52(prompt, client)
+    except Exception as e:
+        out["chatgpt_error"] = str(e)
+        out["chatgpt"] = None
+
+    return out
+
+
+def call_llm(prompt: str, client: "RetryingHTTPClient") -> str:
+    """
+    Unified LLM router (SAFE).
+    - No recursion
+    - Deterministic fallback order
+    - Raises if all providers fail
+    """
+    prompt = clean_text(prompt, 20000)
+
+    res = call_llm_dual(prompt, client)
+
+    if res.get("chatgpt"):
+        return res["chatgpt"]  # type: ignore[return-value]
+
+    if res.get("grok"):
+        return res["grok"]  # type: ignore[return-value]
+
+    raise RuntimeError("LLM unavailable: all providers failed")
+
+
+def call_chatgpt_52(prompt: str, client: "RetryingHTTPClient") -> str:
+    """
+    ChatGPT 5.2 JSON-only call via httpx (retrying).
+    """
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+    if not api_key:
+        raise RuntimeError("missing OPENAI_API_KEY")
+
+    payload = {
+        "model": "gpt-5.2",
+        "input": prompt,
+        "response_format": {"type": "json"},
+    }
+
+    r = client.request(
+        "POST",
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+
+    # support both sync/async client usage
+    if hasattr(r, "__await__"):
+        r = asyncio.get_event_loop().run_until_complete(r)
+
+    j = r.json()
+    try:
+        return (j.get("output_text") or "").strip()
+    except Exception:
+        raise RuntimeError("Invalid OpenAI response format")
+
 
 def _utc_iso() -> str:
     return _dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc).isoformat()
 
 
-# Dwell bounds (used by the quantum carousel engine). Kept local so this file
-# doesn't depend on external TUI constants.
+
 X2_CAROUSEL_MIN_DWELL = float(os.environ.get("RGN_X2_CAROUSEL_MIN_DWELL", "3.8"))
 X2_CAROUSEL_MAX_DWELL = float(os.environ.get("RGN_X2_CAROUSEL_MAX_DWELL", "22.0"))
 
-# Back-compat names used elsewhere
+
 CAROUSEL_MIN_DWELL = X2_CAROUSEL_MIN_DWELL
 CAROUSEL_MAX_DWELL = X2_CAROUSEL_MAX_DWELL
 
-# Build knobs
 X2_MAX_ITEMS = int(os.environ.get("RGN_X2_CAROUSEL_MAX_ITEMS", "80"))
 X2_MAX_STORE = int(os.environ.get("RGN_X2_MAX_STORE", "2500"))
 
 
 def _parse_dt(s: str) -> Optional[_dt.datetime]:
-    """Parse ISO-ish timestamps from X and our DB; returns UTC-aware dt when possible."""
+    
     if not s:
         return None
     s = str(s).strip()
@@ -2394,7 +2367,7 @@ def _softmax(xs: List[float], tau: float = 1.0) -> List[float]:
 
 
 def _dist01(pt: Tuple[float, float, float], center: Tuple[float, float, float], radius: float) -> float:
-    """Normalized distance to sphere center (1.0 == on radius)."""
+    
     r = float(max(1e-9, radius))
     dx = float(pt[0] - center[0])
     dy = float(pt[1] - center[1])
@@ -2428,14 +2401,7 @@ def _ssq_components(v: Dict[str, float]) -> Dict[str, float]:
 
 
 def _domain_scores(v: Dict[str, float]) -> Dict[str, float]:
-    """Project the 9 SSQ axes into 5 higher-level "domains".
-
-    This is used for the dashboard's quantum ...
-
-    Notes:
-    - values are heuristic and bounded to [0,1]
-    - stored only in the raw_json field (no schema migration required)
-    """
+    
     edu = clamp01(v.get("edu", 0.0))
     truth = clamp01(v.get("truth", 0.0))
     incl = clamp01(v.get("incl", 0.0))
