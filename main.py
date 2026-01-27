@@ -4566,7 +4566,7 @@ def _validate_form_csrf_or_400():
         return "CSRF invalid", 400
     return None
 
-# @app.post("/admin/local_llm/download")  # legacy removed
+@app.post("/admin/local_llm/download")  # legacy removed
 def admin_local_llm_download():
     guard = _require_admin()
     if guard:
@@ -4581,7 +4581,7 @@ def admin_local_llm_download():
         flash("Download failed: " + msg, "danger")
     return redirect(url_for("admin_local_llm_page"))
 
-# @app.post("/admin/local_llm/encrypt")  # legacy removed
+@app.post("/admin/local_llm/encrypt")  # legacy removed
 def admin_local_llm_encrypt():
     guard = _require_admin()
     if guard:
@@ -4596,7 +4596,7 @@ def admin_local_llm_encrypt():
         flash("Encrypt failed: " + msg, "danger")
     return redirect(url_for("admin_local_llm_page"))
 
-# @app.post("/admin/local_llm/decrypt")  # legacy removed
+@app.post("/admin/local_llm/decrypt")  # legacy removed
 def admin_local_llm_decrypt():
     guard = _require_admin()
     if guard:
@@ -4611,7 +4611,7 @@ def admin_local_llm_decrypt():
         flash("Decrypt failed: " + msg, "danger")
     return redirect(url_for("admin_local_llm_page"))
 
-# @app.post("/admin/local_llm/delete_plaintext")  # legacy removed
+@app.post("/admin/local_llm/delete_plaintext")  # legacy removed
 def admin_local_llm_delete_plaintext():
     guard = _require_admin()
     if guard:
@@ -4626,7 +4626,7 @@ def admin_local_llm_delete_plaintext():
         flash("Delete failed: " + msg, "danger")
     return redirect(url_for("admin_local_llm_page"))
 
-# @app.post("/admin/local_llm/unload")  # legacy removed
+@app.post("/admin/local_llm/unload")  # legacy removed
 def admin_local_llm_unload():
     guard = _require_admin()
     if guard:
