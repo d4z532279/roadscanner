@@ -10792,6 +10792,21 @@ def x_api_fetch():
         return jsonify({"ok": False, "error": "Fetch failed"}), 502
 
 
+@app.route("/x/api/carousel", methods=["POST"])
+def x_api_carousel():
+    _user_csrf_guard()
+    uid = _require_user_id_or_abort()
+
+    data = request.get_json(silent=True) or {}
+    timebox_s = data.get("timebox_s")
+
+    try:
+        timebox_s = 7 * 60.0 if timebox_s is None else float(timebox_s)
+    except Exception:
+        timebox_s = 7 * 60.0
+
+    items = _x2_build_carousel(uid, timebox_s=timebox_s, limit=220)
+    return jsonify({"ok": True, "items": items})
         
 @app.route("/x/api/label", methods=["POST"])
 def x_api_label():
