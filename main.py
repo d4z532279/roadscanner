@@ -10659,14 +10659,703 @@ def x_dashboard():
 
 @app.route("/x/api/settings", methods=["POST"])
 def x_api_settings():
+    # Require logged-in user + CSRF for this state-changing route
+    _user_csrf_guard()
+    uid = _require_user_id_or_abort()
+
+    # Enforce JSON content-type (best-effort; still allow if client forgot but sent JSON)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+
+    def _is_masked(s: str) -> bool:
+        return ("••••••" in s) or (s.strip() in {"", "—"})
+
+
+    # ---- sanitize / validate inputs ----
+    x_user_id = clean_text(str(data.get("x_user_id") or ""), 128)
+    # allow usernames or numeric IDs; keep conservative chars only
+    if x_user_id and not re.fullmatch(r"[A-Za-z0-9_@\-]{1,64}", x_user_id):
+        return jsonify({"ok": False, "error": "Invalid x_user_id"}), 400
+
+    x_bearer = str(data.get("x_bearer") or "")
+    oai_key = str(data.get("openai_key") or "")
+    oai_model = clean_text(str(data.get("openai_model") or ""), 128) or X2_DEFAULT_MODEL
+
+    # Model allowlist-ish: keep it simple and safe (no spaces, no control chars)
+    if oai_model and not re.fullmatch(r"[A-Za-z0-9._:\-]{1,80}", oai_model):
+        return jsonify({"ok": False, "error": "Invalid openai_model"}), 400
+
+    # ---- write-through to per-user PQ-hybrid vault (only if unmasked) ----
+    wrote = []
+
+    if x_user_id:
+        vault_set(uid, "x_user_id", x_user_id)
+        wrote.append("x_user_id")
+
+    if x_bearer and not _is_masked(x_bearer):
+        # do NOT bleach/tokenize; store raw secret, but length-cap to avoid abuse
+        if len(x_bearer) > 6000:
+            return jsonify({"ok": False, "error": "x_bearer too long"}), 400
+        vault_set(uid, "x_bearer", x_bearer)
+        wrote.append("x_bearer")
+
+    if oai_key and not _is_masked(oai_key):
+        if len(oai_key) > 6000:
+            return jsonify({"ok": False, "error": "openai_key too long"}), 400
+        vault_set(uid, "openai_key", oai_key)
+        wrote.append("openai_key")
+
+    if oai_model:
+        vault_set(uid, "openai_model", oai_model)
+        wrote.append("openai_model")
+
+    # Optional: return which fields updated (no secrets echoed)
+    return jsonify({"ok": True, "updated": wrote})
+    
+@app.route("/x/api/fetch", methods=["POST"])
+def x_api_fetch():
+    # Require logged-in user + CSRF for this state-changing route
+    _user_csrf_guard()
+    uid = _require_user_id_or_abort()
+
+    bearer = vault_get(uid, "x_bearer", "") or ""
+    x_user_id = vault_get(uid, "x_user_id", "") or ""
+
+    # Reject masked/placeholder secrets and sanitize inputs
+    bearer = clean_text(bearer, 4096)
+    x_user_id = clean_text(x_user_id, 128)
+
+    if (not bearer) or ("••••••" in bearer) or (not x_user_id) or ("••••••" in x_user_id):
+        return jsonify({"ok": False, "error": "Missing X settings: x_bearer + x_user_id"}), 400
+
+    # Clamp max_results to safe bounds
+    max_results = 90
+    try:
+        mr = int(os.environ.get("RGN_X_FETCH_MAX", str(max_results)))
+        max_results = max(5, min(100, mr))
+    except Exception:
+        max_results = 90
+
+    try:
+        payload = x2_fetch_user_tweets(bearer=bearer, user_id=x_user_id, max_results=max_results)
+
+        # Parse + sanitize before storing
+        rows = x2_parse_tweets(payload, src="user") or []
+        safe_rows = []
+        for r in rows:
+            try:
+                # support dict or dataclass-like shapes
+                if isinstance(r, dict):
+                    tid = clean_text(r.get("tid", "") or r.get("id", "") or "", 64)
+                    author = clean_text(r.get("author", "") or "", 80)
+                    created_at = clean_text(r.get("created_at", "") or "", 80)
+                    text = clean_text(r.get("text", "") or "", 8000)
+                    src = clean_text(r.get("src", "user") or "user", 24) or "user"
+                    if tid and text:
+                        safe_rows.append(
+                            {"tid": tid, "author": author, "created_at": created_at, "text": text, "src": src}
+                        )
+                else:
+                    # TweetRow dataclass path
+                    tid = clean_text(getattr(r, "tid", "") or "", 64)
+                    text = clean_text(getattr(r, "text", "") or "", 8000)
+                    if tid and text:
+                        safe_rows.append(r)
+            except Exception:
+                continue
+
+        n = _x2_db_upsert_tweets(uid, safe_rows)
+
+        # Only return small, non-sensitive meta (avoid echoing payload/text)
+        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        safe_meta = {}
+        try:
+            if isinstance(meta, dict):
+                for k in ("result_count", "next_token", "newest_id", "oldest_id"):
+                    if k in meta and meta.get(k) is not None:
+                        safe_meta[k] = clean_text(str(meta.get(k)), 256)
+        except Exception:
+            safe_meta = {}
+
+        return jsonify({"ok": True, "count": int(n), "meta": safe_meta})
+    except Exception:
+        try:
+            logger.exception("x_api_fetch failed")  # type: ignore[name-defined]
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": "Fetch failed"}), 502
+
+
+        
+@app.route("/x/api/label", methods=["POST"])
+def x_api_label():
+    # Require logged-in user + CSRF for this state-changing route
+    _user_csrf_guard()
+    uid = _require_user_id_or_abort()
+
+    # Read vault secrets/settings (masked values should never be stored here)
+    api_key = vault_get(uid, "openai_key", "") or ""
+    model = clean_text(vault_get(uid, "openai_model", X2_DEFAULT_MODEL) or X2_DEFAULT_MODEL, 128) or X2_DEFAULT_MODEL
+
+    if not api_key or "••••••" in api_key:
+        return jsonify({"ok": False, "error": "Missing OpenAI key in vault"}), 400
+
+    # Clamp batch size to avoid abuse
+    try:
+        batch = int(os.environ.get("RGN_LABEL_BATCH", "8"))
+    except Exception:
+        batch = 8
+    batch = max(1, min(32, batch))
+
+    # Only label unlabeled tweets for this user
+    ids = _x2_db_unlabeled_ids(uid, limit=batch)
+    if not ids:
+        return jsonify({"ok": True, "count": 0})
+
+    # Pull only the tweets we actually need (avoid huge in-memory map)
+    # (Assumes you have _x2_db_get_tweets_by_ids; if not, fall back below.)
+    tweets_by_id = {}
+    try:
+        rows = _x2_db_get_tweets_by_ids(uid, ids)  # preferred hardened path
+        tweets_by_id = {str(r.get("tid", "")): r for r in (rows or []) if r and r.get("tid")}
+    except Exception:
+        # fallback to prior behavior but still bounded
+        tweets_by_id = {
+            str(t.get("tid", "")): t
+            for t in (_x2_db_list_tweets(uid, limit=400) or [])
+            if t and t.get("tid")
+        }
+
+    labeled = 0
+    errors = 0
+    try:
+        for tid in ids:
+            tid = clean_text(str(tid or ""), 64)
+            if not tid:
+                continue
+
+            t = tweets_by_id.get(tid)
+            if not t:
+                continue
+
+            # Ensure tweet text is sanitized before it ever touches prompts/logs
+            try:
+                t["text"] = clean_text(t.get("text", "") or "", 8000)
+                t["author"] = clean_text(t.get("author", "") or "", 80)
+                t["created_at"] = clean_text(t.get("created_at", "") or "", 80)
+                t["src"] = clean_text(t.get("src", "") or "", 24)
+            except Exception:
+                pass
+
+            # Label with strict error isolation per item
+            try:
+                lab = x2_openai_label(api_key=api_key, model=model, tweet=t)
+                _x2_db_upsert_label(uid, tid, lab, model=model)
+                labeled += 1
+            except Exception:
+                errors += 1
+                # keep going; don't fail the whole batch
+
+        # Return partial success + error count (no internal exception leakage)
+        return jsonify({"ok": True, "count": labeled, "errors": errors})
+    except Exception:
+        # Avoid leaking internals; log server-side if you have a logger
+        try:
+            logger.exception("x_api_label failed")  # type: ignore[name-defined]
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": "Labeling failed"}), 500
+
+
+@app.route("/x/api/carousel", methods=["POST"])
+def x_api_carousel():
+    _user_csrf_guard()
+    uid = _require_user_id_or_abort()
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+
+    timebox_raw = data.get("timebox_s", None)
+
+    
+    DEFAULT_S = 7 * 60.0
+    MIN_S = 60.0
+    MAX_S = 4 * 60.0 * 60.0
+
+    timebox_s = DEFAULT_S
+    if timebox_raw is not None:
+        try:
+            timebox_s = float(timebox_raw)
+        except Exception:
+            timebox_s = DEFAULT_S
+
+    if not (timebox_s == timebox_s):  # NaN guard
+        timebox_s = DEFAULT_S
+    timebox_s = max(MIN_S, min(MAX_S, timebox_s))
+
+    try:
+        items = _x2_build_carousel(uid, timebox_s=timebox_s, limit=220)
+        if not isinstance(items, list):
+            items = []
+        return jsonify({"ok": True, "items": items, "timebox_s": timebox_s})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/x", methods=["GET"])
+def x_dashboard():
+    uid = _require_user_id_or_redirect()
+    if not isinstance(uid, int):
+        return uid  # redirect response
+
+    # vault values (masked before display)
+    x_user = vault_get(uid, "x_user_id", "")
+    x_bearer = vault_get(uid, "x_bearer", "")
+    oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL) or X2_DEFAULT_MODEL
+    oai_key = vault_get(uid, "openai_key", "")
+
+    # admin flag (non-fatal)
+    try:
+        _require_admin()
+        is_admin = True
+    except Exception:
+        is_admin = False
+
+    tpl = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}"/>
+  <title>RGN X Dashboard</title>
+
+  <style>
+    :root{
+      --bg0:#070A12; --bg1:#0B1020; --muted:#97A3C7; --txt:#EAF0FF;
+      --a:#60A5FA; --b:#34D399; --c:#F472B6; --d:#FBBF24; --danger:#FB7185;
+      --br:20px;
+    }
+    *{box-sizing:border-box;}
+    body{
+      margin:0; color:var(--txt);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background:
+        radial-gradient(1100px 700px at 18% 12%, rgba(96,165,250,.22), transparent 60%),
+        radial-gradient(900px 650px at 85% 18%, rgba(244,114,182,.18), transparent 55%),
+        radial-gradient(900px 650px at 50% 90%, rgba(52,211,153,.16), transparent 60%),
+        linear-gradient(180deg, var(--bg0), var(--bg1));
+      min-height:100vh;
+    }
+    a{color:var(--a); text-decoration:none;}
+    .wrap{max-width:1200px; margin:0 auto; padding:22px;}
+    .topbar{
+      display:flex; gap:14px; align-items:center; justify-content:space-between; flex-wrap:wrap;
+      padding:14px 16px; border-radius: var(--br);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid rgba(255,255,255,.08);
+      box-shadow: 0 12px 45px rgba(0,0,0,.35);
+      position:sticky; top:12px; backdrop-filter: blur(10px); z-index:10;
+    }
+    .brand{display:flex; gap:12px; align-items:center;}
+    .logo{
+      width:38px; height:38px; border-radius:14px;
+      background: conic-gradient(from 210deg, var(--a), var(--b), var(--c), var(--d), var(--a));
+      box-shadow: 0 10px 22px rgba(0,0,0,.35);
+    }
+    .title{font-weight:800; letter-spacing:.4px;}
+    .sub{color:var(--muted); font-size:13px;}
+    .grid{display:grid; gap:16px; grid-template-columns: 360px 1fr; margin-top:16px;}
+    @media (max-width: 980px){ .grid{grid-template-columns: 1fr;} }
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius: var(--br);
+      box-shadow: 0 16px 55px rgba(0,0,0,.38);
+      overflow:hidden;
+    }
+    .card h3{margin:0; padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.08); font-size:14px; letter-spacing:.3px;}
+    .card .body{padding:14px 16px;}
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:8px 10px; border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      color:var(--muted); font-size:12px;
+    }
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .btn{
+      appearance:none; border:none; cursor:pointer;
+      padding:10px 12px; border-radius: 14px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      color: var(--txt); font-weight:700; letter-spacing:.2px;
+      transition: transform .05s ease, background .2s ease;
+    }
+    .btn:hover{background: rgba(255,255,255,.10);}
+    .btn:active{transform: translateY(1px);}
+    .btn.primary{
+      background: linear-gradient(135deg, rgba(96,165,250,.35), rgba(52,211,153,.22));
+      border: 1px solid rgba(96,165,250,.28);
+    }
+    .btn.danger{
+      background: linear-gradient(135deg, rgba(251,113,133,.28), rgba(244,114,182,.18));
+      border: 1px solid rgba(251,113,133,.28);
+    }
+    .field{display:flex; flex-direction:column; gap:6px; margin:10px 0;}
+    label{font-size:12px; color:var(--muted);}
+    input, textarea{
+      width:100%; padding:10px 12px; border-radius: 14px;
+      background: rgba(5,8,16,.55);
+      border:1px solid rgba(255,255,255,.12);
+      color:var(--txt);
+      outline:none;
+    }
+    textarea{min-height:84px; resize:vertical;}
+    .status{
+      padding:10px 12px; border-radius:14px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      color: var(--muted); font-size:13px;
+    }
+    .tweet{padding:14px 16px;}
+    .tweet .meta{display:flex; gap:10px; flex-wrap:wrap; color:var(--muted); font-size:12px;}
+    .tweet .text{margin-top:10px; line-height:1.45; font-size:15px; white-space:pre-wrap;}
+    .bars{margin-top:12px; display:grid; grid-template-columns: 1fr; gap:8px;}
+    .barline{display:grid; grid-template-columns: 68px 1fr 40px; gap:10px; align-items:center; font-size:12px; color:var(--muted);}
+    .bar{height:10px; border-radius:999px; background: rgba(255,255,255,.08); overflow:hidden; border:1px solid rgba(255,255,255,.10);}
+    .fill{height:100%; width:0%; background: linear-gradient(90deg, rgba(96,165,250,.75), rgba(52,211,153,.75), rgba(244,114,182,.65));}
+    .kbd{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas; font-size:12px; color: rgba(255,255,255,.86);}
+    .navmini{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .navmini a{color:rgba(255,255,255,.80); font-size:13px;}
+    .navmini a:hover{color:#fff;}
+    .hr{height:1px; background: rgba(255,255,255,.08); margin:12px 0;}
+    .small{font-size:12px; color:var(--muted); line-height:1.4;}
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div class="title">RGN X Dashboard</div>
+          <div class="sub">Per-user PQ-hybrid vault • SSQ carousel • timebox start/stop</div>
+        </div>
+      </div>
+
+      <div class="navmini">
+        <a href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('risk_route') }}">Route Risk</a>
+        <a href="{{ url_for('security') }}">Security</a>
+        <a href="{{ url_for('logout') }}">Logout</a>
+      </div>
+
+      <div class="row">
+        <span class="pill">X user: <span class="kbd">{{ x_user or "—" }}</span></span>
+        <span class="pill">bearer: <span class="kbd">{{ x_bearer_mask or "—" }}</span></span>
+        <span class="pill">OpenAI: <span class="kbd">{{ oai_model }}</span></span>
+        {% if is_admin %}
+          <a class="btn" href="{{ url_for('x_admin') }}">Admin</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Controls</h3>
+        <div class="body">
+          <div class="row" style="margin-bottom:10px;">
+            <button class="btn primary" id="btnFetch">Fetch tweets</button>
+            <button class="btn" id="btnLabel">Label batch</button>
+            <button class="btn" id="btnBuild">Build carousel</button>
+          </div>
+
+          <div class="row" style="margin-bottom:10px;">
+            <button class="btn" id="btnPrev">◀ Prev</button>
+            <button class="btn" id="btnPlay">⏵ Autoplay</button>
+            <button class="btn" id="btnNext">Next ▶</button>
+          </div>
+
+          <div class="field">
+            <label>Timebox minutes (start/stop window)</label>
+            <div class="row">
+              <input id="timeboxMin" type="number" min="1" max="240" value="15" style="max-width:140px;"/>
+              <button class="btn primary" id="btnStart">Start</button>
+              <button class="btn danger" id="btnStop">Stop</button>
+            </div>
+            <div class="small">Autoplay respects the window. When time hits 0, it pauses.</div>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="field">
+            <label>Settings (stored in your PQ-hybrid vault)</label>
+            <input id="xUser" placeholder="X user id" value="{{ x_user }}"/>
+            <input id="xBearer" placeholder="X bearer token" value="{{ x_bearer_mask }}"/>
+            <input id="oaiKey" placeholder="OpenAI API key" value="{{ oai_key_mask }}"/>
+            <input id="oaiModel" placeholder="OpenAI model" value="{{ oai_model }}"/>
+            <button class="btn" id="btnSave">Save settings</button>
+            <div class="small">Paste full secrets; they are stored encrypted. This page shows masked values.</div>
+          </div>
+
+          <div class="status" id="status">Ready.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Carousel</h3>
+        <div class="tweet">
+          <div class="meta" id="meta">—</div>
+          <div class="text" id="text">No items yet. Fetch → Label → Build.</div>
+          <div class="bars" id="bars"></div>
+          <div class="hr"></div>
+          <div class="small" id="summary"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    "use strict";
+
+    const csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || "";
+    const headers = {"Content-Type":"application/json", "X-CSRFToken": csrf};
+
+    const $ = (id) => document.getElementById(id);
+
+    const elStatus = $("status");
+    const elMeta = $("meta");
+    const elText = $("text");
+    const elBars = $("bars");
+    const elSummary = $("summary");
+
+    let items = [];
+    let idx = 0;
+
+    let autoplay = false;
+    let autoplayTimer = null;
+
+    let timeboxLeft = 0;
+    let timeboxActive = false;
+    let timeboxTimer = null;
+
+    function setStatus(s){ elStatus.textContent = String(s || ""); }
+
+    function clamp01(v){
+      v = Number(v || 0);
+      if (Number.isNaN(v)) v = 0;
+      return Math.max(0, Math.min(1, v));
+    }
+
+    function barLine(name, v){
+      const pct = clamp01(v) * 100;
+      const row = document.createElement("div");
+      row.className = "barline";
+      row.innerHTML =
+        `<div>${name}</div>` +
+        `<div class="bar"><div class="fill" style="width:${pct.toFixed(2)}%"></div></div>` +
+        `<div style="text-align:right;">${Number(v||0).toFixed(2)}</div>`;
+      return row;
+    }
+
+    function render(){
+      if(!items.length){
+        elMeta.textContent = "—";
+        elText.textContent = "No items yet. Fetch → Label → Build.";
+        elBars.innerHTML = "";
+        elSummary.textContent = "";
+        return;
+      }
+
+      idx = ((idx % items.length) + items.length) % items.length;
+      const it = items[idx] || {};
+      const t = it.tweet || {};
+      const l = it.label || {};
+
+      const src = t.src || "user";
+      const author = t.author || "—";
+      const created = t.created_at || "";
+      const ipm = Number(it.ipm || 0).toFixed(2);
+      const dwell = Number(it.dwell_s || 0).toFixed(1);
+
+      elMeta.textContent =
+        `#${idx+1}/${items.length}  [${src}]  @${author}  ${created}  SSQ=${ipm}  dwell=${dwell}s`;
+      elText.textContent = t.text || "";
+
+      elBars.innerHTML = "";
+      const keys = [
+        ["neg", l.neg], ["sar", l.sar], ["tone", l.tone], ["edu", l.edu], ["truth", l.truth],
+        ["cool", l.cool], ["click", l.click], ["incl", l.incl], ["ext", l.ext]
+      ];
+      for (const [k, v] of keys) elBars.appendChild(barLine(k, v));
+
+      const tags = Array.isArray(l.tags) ? l.tags.slice(0,10) : [];
+      const tagsS = tags.map(x => `#${String(x||"").trim()}`).filter(Boolean).join(" ");
+      const summ = l.summary ? `Summary: ${l.summary}` : "";
+      elSummary.textContent = (summ + (tagsS ? ("  •  " + tagsS) : "")).trim();
+    }
+
+    async function postJSON(url, body){
+      const r = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body || {})
+      });
+      const txt = await r.text();
+      let j;
+      try { j = JSON.parse(txt); }
+      catch(e){ j = {ok:false, error: txt || ("HTTP "+r.status)}; }
+      if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP "+r.status));
+      return j;
+    }
+
+    async function refreshCarousel(){
+      setStatus("Loading carousel…");
+      const j = await postJSON("{{ url_for('x_api_carousel') }}", {
+        timebox_s: timeboxActive ? timeboxLeft : null
+      });
+      items = j.items || [];
+      idx = 0;
+      render();
+      setStatus(`Carousel ready: ${items.length} items.`);
+    }
+
+    function stepNext(){ if(items.length){ idx = (idx + 1) % items.length; render(); } }
+    function stepPrev(){ if(items.length){ idx = (idx - 1 + items.length) % items.length; render(); } }
+
+    function stopAutoplay(){
+      autoplay = false;
+      if (autoplayTimer){ clearTimeout(autoplayTimer); autoplayTimer = null; }
+      $("btnPlay").textContent = "⏵ Autoplay";
+    }
+
+    function scheduleAutoplay(){
+      if(!autoplay) return;
+      if(timeboxActive && timeboxLeft <= 0){
+        stopAutoplay();
+        setStatus("Timebox complete. Paused.");
+        return;
+      }
+      const it = items[idx] || {};
+      const dwell = Math.max(3.0, Math.min(22.0, Number(it.dwell_s || 6.0)));
+      autoplayTimer = setTimeout(function(){
+        if(!autoplay) return;
+        stepNext();
+        scheduleAutoplay();
+      }, dwell * 1000);
+    }
+
+    function startAutoplay(){
+      if(!items.length){ setStatus("Build a carousel first."); return; }
+      autoplay = true;
+      $("btnPlay").textContent = "⏸ Pause";
+      if (autoplayTimer){ clearTimeout(autoplayTimer); autoplayTimer = null; }
+      scheduleAutoplay();
+    }
+
+    function tickTimebox(){
+      if(!timeboxActive) return;
+      timeboxLeft = Math.max(0, timeboxLeft - 1);
+
+      const m = Math.floor(timeboxLeft / 60);
+      const s = timeboxLeft % 60;
+      setStatus(`Timebox: ${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")} • ${items.length} items`);
+
+      if(timeboxLeft <= 0){
+        timeboxActive = false;
+        stopAutoplay();
+        setStatus("Timebox complete. Paused.");
+      }
+    }
+
+    // Buttons
+    $("btnFetch").onclick = async function(){
+      try{
+        setStatus("Fetching from X…");
+        const j = await postJSON("{{ url_for('x_api_fetch') }}", {});
+        setStatus(`Fetched ${j.count || 0} tweets.`);
+      }catch(e){ setStatus("Fetch error: " + e.message); }
+    };
+
+    $("btnLabel").onclick = async function(){
+      try{
+        setStatus("Labeling batch…");
+        const j = await postJSON("{{ url_for('x_api_label') }}", {});
+        setStatus(`Labeled ${j.count || 0} tweets.`);
+      }catch(e){ setStatus("Label error: " + e.message); }
+    };
+
+    $("btnBuild").onclick = async function(){
+      try { await refreshCarousel(); }
+      catch(e){ setStatus("Build error: " + e.message); }
+    };
+
+    $("btnNext").onclick = function(){ stepNext(); if(autoplay) stopAutoplay(); };
+    $("btnPrev").onclick = function(){ stepPrev(); if(autoplay) stopAutoplay(); };
+    $("btnPlay").onclick = function(){ autoplay ? stopAutoplay() : startAutoplay(); };
+
+    $("btnStart").onclick = function(){
+      const mins = Math.max(1, Math.min(240, parseInt($("timeboxMin").value || "15", 10) || 15));
+      timeboxLeft = mins * 60;
+      timeboxActive = true;
+
+      if (timeboxTimer) clearInterval(timeboxTimer);
+      timeboxTimer = setInterval(tickTimebox, 1000);
+
+      setStatus(`Timebox started: ${mins} min.`);
+      if (autoplay){ stopAutoplay(); startAutoplay(); }
+    };
+
+    $("btnStop").onclick = function(){
+      timeboxActive = false;
+      timeboxLeft = 0;
+      if (timeboxTimer){ clearInterval(timeboxTimer); timeboxTimer = null; }
+      stopAutoplay();
+      setStatus("Stopped.");
+    };
+
+    $("btnSave").onclick = async function(){
+      try{
+        const body = {
+          x_user_id: $("xUser").value || "",
+          x_bearer: $("xBearer").value || "",
+          openai_key: $("oaiKey").value || "",
+          openai_model: $("oaiModel").value || ""
+        };
+        setStatus("Saving…");
+        await postJSON("{{ url_for('x_api_settings') }}", body);
+        setStatus("Saved. (Refresh page to see masked values updated)");
+      }catch(e){ setStatus("Save error: " + e.message); }
+    };
+
+  })();
+  </script>
+</body>
+</html>"""
+
+    return render_template_string(
+        tpl,
+        x_user=x_user,
+        x_bearer_mask=_mask_secret(x_bearer),
+        oai_model=oai_model,
+        oai_key_mask=_mask_secret(oai_key),
+        is_admin=is_admin,
+    )
+
+
+@app.route("/x/api/settings", methods=["POST"])
+def x_api_settings():
     _user_csrf_guard()
     uid = _require_user_id_or_abort()
     data = request.get_json(silent=True) or {}
-    # Only overwrite if user provided a non-masked value; accept masked as "leave as-is"
-    x_user_id = clean_text(str(data.get("x_user_id","") or ""), 256)
-    x_bearer = str(data.get("x_bearer","") or "")
-    oai_key = str(data.get("openai_key","") or "")
-    oai_model = clean_text(str(data.get("openai_model","") or ""), 128) or X2_DEFAULT_MODEL
+
+    x_user_id = clean_text(str(data.get("x_user_id", "") or ""), 256)
+    x_bearer = str(data.get("x_bearer", "") or "")
+    oai_key = str(data.get("openai_key", "") or "")
+    oai_model = clean_text(str(data.get("openai_model", "") or ""), 128) or X2_DEFAULT_MODEL
 
     if x_user_id:
         vault_set(uid, "x_user_id", x_user_id)
@@ -10676,15 +11365,20 @@ def x_api_settings():
         vault_set(uid, "openai_key", oai_key)
     if oai_model:
         vault_set(uid, "openai_model", oai_model)
+
     return jsonify({"ok": True})
+
 
 @app.route("/x/api/fetch", methods=["POST"])
 def x_api_fetch():
+    _user_csrf_guard()
     uid = _require_user_id_or_abort()
+
     bearer = vault_get(uid, "x_bearer", "")
     x_user_id = vault_get(uid, "x_user_id", "")
     if not bearer or not x_user_id:
         return jsonify({"ok": False, "error": "Missing X settings: x_bearer + x_user_id"}), 400
+
     try:
         payload = x2_fetch_user_tweets(bearer=bearer, user_id=x_user_id, max_results=90)
         rows = x2_parse_tweets(payload, src="user")
@@ -10693,11 +11387,14 @@ def x_api_fetch():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
 @app.route("/x/api/label", methods=["POST"])
 def x_api_label():
+    _user_csrf_guard()
     uid = _require_user_id_or_abort()
+
     api_key = vault_get(uid, "openai_key", "")
-    model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
+    model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL) or X2_DEFAULT_MODEL
     if not api_key:
         return jsonify({"ok": False, "error": "Missing OpenAI key in vault"}), 400
 
@@ -10707,6 +11404,7 @@ def x_api_label():
 
     tweets = {t["tid"]: t for t in _x2_db_list_tweets(uid, limit=400)}
     labeled = 0
+
     try:
         for tid in ids:
             t = tweets.get(tid)
@@ -10719,81 +11417,129 @@ def x_api_label():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
 @app.route("/x/api/carousel", methods=["POST"])
 def x_api_carousel():
+    _user_csrf_guard()
     uid = _require_user_id_or_abort()
+
     data = request.get_json(silent=True) or {}
     timebox_s = data.get("timebox_s")
+
     try:
-        if timebox_s is None:
-            timebox_s = 7 * 60.0
-        else:
-            timebox_s = float(timebox_s)
+        timebox_s = 7 * 60.0 if timebox_s is None else float(timebox_s)
     except Exception:
         timebox_s = 7 * 60.0
+
     items = _x2_build_carousel(uid, timebox_s=timebox_s, limit=220)
     return jsonify({"ok": True, "items": items})
+
 
 @app.route("/x/admin", methods=["GET", "POST"])
 def x_admin():
     _require_admin()
-    if request.method == "POST":
-        # Global defaults for X dashboard (optional)
-        d = request.form or {}
+
+    def get_config(key: str, default: str) -> str:
         con = create_database_connection()
-        con.execute(
-            "INSERT INTO config(k,v,updated_at) VALUES(?,?,?) "
-            "ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-            ("x2_default_model", clean_text(d.get("default_model","") or X2_DEFAULT_MODEL, 128), now_iso()),
+        try:
+            row = con.execute("SELECT v FROM config WHERE k = ?", (key,)).fetchone()
+            return row[0] if row and row[0] else default
+        finally:
+            con.close()
+
+    def set_config(key: str, value: str):
+        con = create_database_connection()
+        try:
+            con.execute(
+                """
+                INSERT INTO config (k, v, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(k) DO UPDATE
+                  SET v = excluded.v,
+                      updated_at = excluded.updated_at
+                """,
+                (key, value, now_iso()),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    if request.method == "POST":
+        # ✅ Admin CSRF validation
+        validate_csrf(request.form.get("csrf_token"))
+
+        default_model = clean_text(
+            (request.form.get("default_model") or X2_DEFAULT_MODEL),
+            128,
         )
-        con.commit()
-        con.close()
+        set_config("x2_default_model", default_model)
+
         flash("Saved X admin settings.", "success")
         return redirect(url_for("x_admin"))
 
-    con = create_database_connection()
-    row = con.execute("SELECT v FROM config WHERE k='x2_default_model'").fetchone()
-    con.close()
-    default_model = row[0] if row and row[0] else X2_DEFAULT_MODEL
-    tpl = """<!doctype html>
-<html><head>
+    default_model = get_config("x2_default_model", X2_DEFAULT_MODEL)
+
+    tpl = r"""<!doctype html>
+<html lang="en">
+<head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>X Admin</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto; background:#0b1020; color:#eaf0ff; margin:0;}
-    .wrap{max-width:720px; margin:0 auto; padding:24px;}
-    .card{background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); border-radius:18px; padding:16px;}
-    input{width:100%; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:rgba(0,0,0,.25); color:#eaf0ff;}
-    .btn{margin-top:12px; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.08); color:#eaf0ff; cursor:pointer; font-weight:700;}
-    a{color:#60a5fa; text-decoration:none;}
-    .small{color:rgba(255,255,255,.70); font-size:13px; line-height:1.4;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto;background:#0b1020;color:#eaf0ff;margin:0;}
+    .wrap{max-width:720px;margin:0 auto;padding:24px;}
+    .card{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);border-radius:18px;padding:16px;}
+    input{width:100%;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:#eaf0ff;}
+    .btn{margin-top:12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:#eaf0ff;cursor:pointer;font-weight:700;}
+    a{color:#60a5fa;text-decoration:none;}
+    .small{color:rgba(255,255,255,.70);font-size:13px;line-height:1.4;}
   </style>
+  <script>
+    (function(){
+      "use strict";
+      document.addEventListener("DOMContentLoaded", function(){
+        var form = document.querySelector("form[data-x-admin]");
+        var saved = document.querySelector("[data-saved-indicator]");
+        if(!form || !saved) return;
+        form.addEventListener("submit", function(){ saved.style.display = "block"; });
+      });
+    })();
+  </script>
 </head>
 <body>
   <div class="wrap">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <h2 style="margin:0;">X Admin Settings</h2>
-      <a href="/x">Back to X</a>
+      <a href="{{ url_for('x_dashboard') }}">Back to X</a>
     </div>
+
     <div class="card">
-      <form method="POST">
+      <form method="POST" data-x-admin>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
         <label class="small">Default OpenAI model for new users</label>
         <input name="default_model" value="{{ default_model }}"/>
         <button class="btn" type="submit">Save</button>
       </form>
+
+      <div class="small" data-saved-indicator style="display:none;margin-top:12px;">
+        ✔ Saving…
+      </div>
+
       <div class="small" style="margin-top:12px;">
-        Notes:
+        <strong>Notes</strong>
         <ul>
           <li>Per-user secrets live in <b>user_vault</b>, encrypted via the existing PQ-hybrid seal wrapper.</li>
-          <li>All /x/api/* POST routes require a logged-in session and CSRF.</li>
+          <li>All <code>/x/api/*</code> POST routes require a logged-in session and CSRF.</li>
+          <li>This page is admin-only.</li>
         </ul>
       </div>
     </div>
   </div>
-</body></html>"""
+</body>
+</html>"""
     return render_template_string(tpl, default_model=default_model)
+
+
 
 
 if __name__ == '__main__':
