@@ -91,11 +91,7 @@ class SealedCache(TypedDict, total=False):
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
-try:
-    import numpy as np
-except Exception:
-    np = None
-    
+
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
 US_STATES_DICT = geonames.get_us_states()         
@@ -975,6 +971,45 @@ class ColorSync:
                 h = (r - g) / d + 4
             h /= 6
         return int(h * 360), int(s * 100), int(l * 100)
+
+_WEATHER_COLOR = ColorSync()
+
+_WEATHER_CODE_LABELS = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Freezing drizzle (light)",
+    57: "Freezing drizzle (dense)",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Freezing rain (light)",
+    67: "Freezing rain (heavy)",
+    71: "Slight snow",
+    73: "Moderate snow",
+    75: "Heavy snow",
+    77: "Snow grains",
+    80: "Rain showers (slight)",
+    81: "Rain showers (moderate)",
+    82: "Rain showers (violent)",
+    85: "Snow showers (slight)",
+    86: "Snow showers (heavy)",
+    95: "Thunderstorm",
+    96: "Thunderstorm (slight hail)",
+    99: "Thunderstorm (heavy hail)",
+}
+
+def _weather_code_label(code: int | str | None) -> str:
+    try:
+        return _WEATHER_CODE_LABELS.get(int(code), "Unknown")
+    except Exception:
+        return "Unknown"
 
 
 colorsync = ColorSync()
@@ -7252,6 +7287,49 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
     logger.warning("PHF processing failed; defaulting to Unsafe.")
     return False, "PHF processing failed."
 
+async def weather_phf_filter_input(input_text: str) -> tuple[bool, str]:
+
+    logger.debug(
+        "Entering weather_phf_filter_input with input length %d",
+        len(input_text) if isinstance(input_text, str) else 0)
+
+    if not input_text or not isinstance(input_text, str):
+        logger.warning(
+            "weather_phf_filter_input received invalid or empty input_text.")
+        return False, "Invalid input."
+
+    weather_prompt = (
+        "You are the Weather LLM Security Guide. Apply the Probabilistic Harm "
+        "Filter (PHF) to weather + route inputs before they are used in a report "
+        "or forecast explanation. Each category must be labeled Safe or Flagged.\n\n"
+        "### Categories:\n"
+        "1. Violence\n"
+        "2. Hate Speech\n"
+        "3. Self-Harm\n"
+        "4. Harassment/Bullying\n"
+        "5. Illegal Activities\n"
+        "6. Sensitive Location Disclosure\n\n"
+        "[inspectthiscontent]\n"
+        f"\"{input_text}\"\n"
+        "---[/inspectthiscontent]\n"
+        "**Assessment Format**:\n"
+        "- Label each category Safe or Flagged.\n"
+        "- Conclude with Final Recommendation: Safe or Flagged.\n"
+    )
+
+    try:
+        logger.debug("Attempting Weather PHF check.")
+        response = await run_grok_completion(weather_prompt)
+        if response and ("Safe" in response or "Flagged" in response):
+            logger.debug("Weather PHF succeeded: %s", response.strip())
+            return "Safe" in response, f"Weather PHF: {response.strip()}"
+        logger.debug("Weather PHF did not return expected keywords.")
+    except Exception as e:
+        logger.error("Weather PHF failed: %s", e, exc_info=True)
+
+    logger.warning("Weather PHF processing failed; defaulting to Unsafe.")
+    return False, "Weather PHF processing failed."
+
 async def scan_debris_for_route(
     lat: float,
     lon: float,
@@ -8428,6 +8506,8 @@ def register():
           integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
           integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
 
     <style>
         body {
@@ -8753,6 +8833,8 @@ def settings():
     <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
     <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
             integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 
 </body>
 </html>
@@ -9422,6 +9504,25 @@ def dashboard():
         .btn-custom:hover {
             background: #019a9e;
         }
+        .btn-quantum {
+            background: linear-gradient(135deg, #6d5cff, #00e5ff);
+            color: #0b0b14;
+            font-weight: 800;
+            border: none;
+            box-shadow: 0 12px 30px rgba(77, 123, 255, 0.35);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .btn-quantum:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 40px rgba(0, 229, 255, 0.35);
+            color: #0b0b14;
+        }
+        .btn-quantum-outline {
+            background: transparent;
+            border: 1px solid rgba(0, 229, 255, 0.55);
+            color: #c7f6ff;
+            font-weight: 700;
+        }
         @media (max-width: 767px) {
             .sidebar { width: 60px; }
             .sidebar a { padding: 15px 10px; text-align: center; }
@@ -9471,14 +9572,53 @@ def dashboard():
         }
         .chip-status.ok{ background: rgba(46, 204, 113, 0.14); border-color: rgba(46,204,113,0.24); }
         .chip-status.warn{ background: rgba(241, 196, 15, 0.14); border-color: rgba(241,196,15,0.24); }
+        .tab-section{ display:none; }
+        .tab-section.active{ display:block; }
+        .weather-grid{
+            display:grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap:16px;
+        }
+        .weather-card{
+            background: rgba(255,255,255,0.06);
+            border:1px solid rgba(255,255,255,0.12);
+            border-radius:16px;
+            padding:16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        .weather-card h5{ margin-bottom:12px; color:#9fe7ff; }
+        .weather-chip{
+            display:inline-flex; align-items:center; gap:8px;
+            padding:8px 12px; border-radius:999px;
+            background: rgba(255,255,255,0.08);
+            border:1px solid rgba(255,255,255,0.12);
+            font-weight:700;
+        }
+        #weatherMap{ height: 280px; border-radius: 14px; overflow: hidden; }
+        .forecast-buttons{ display:flex; flex-wrap:wrap; gap:10px; }
+        .forecast-buttons .btn{ border-radius: 999px; }
+        .radar-meta{ font-size: 0.9rem; color: #b6d6ff; }
+        .quantum-panel{
+            background: linear-gradient(145deg, rgba(33, 36, 86, 0.85), rgba(10, 11, 30, 0.95));
+            border: 1px solid rgba(109, 92, 255, 0.35);
+        }
+        .radar-idea{
+            border-left: 3px solid rgba(0, 229, 255, 0.6);
+            padding-left: 12px;
+            margin-bottom: 12px;
+        }
+        .radar-idea h6{ color: #9ff3ff; margin-bottom: 6px; }
 </style>
 </head>
 <body>
 
     <div class="sidebar">
         <div class="navbar-brand">QRS</div>
-        <a href="#" class="nav-link active" onclick="showSection('step1')">
+        <a href="#" class="nav-link active" data-tab="scanTab" onclick="showTab('scanTab')">
             <i class="fas fa-home"></i> <span>Dashboard</span>
+        </a>
+        <a href="#" class="nav-link" data-tab="weatherTab" onclick="showTab('weatherTab')">
+            <i class="fas fa-cloud-sun-rain"></i> <span>Weather</span>
         </a>
         {% if session.is_admin %}
         <a href="{{ url_for('settings') }}">
@@ -9506,6 +9646,7 @@ def dashboard():
     </div>
 
     <div class="content">
+        <div id="scanTab" class="tab-section active">
             <div class="quick-apps">
                 <div class="quick-left">
                     {% if x_dashboard_url %}
@@ -9642,6 +9783,93 @@ def dashboard():
             <p>No reports available.</p>
             {% endif %}
         </div>
+        </div>
+
+        <div id="weatherTab" class="tab-section">
+            <div class="weather-grid">
+                <div class="weather-card">
+                    <h5>Location + Radar</h5>
+                    <div class="form-group">
+                        <label for="weather_latitude">Latitude</label>
+                        <input type="text" class="form-control" id="weather_latitude" placeholder="Latitude">
+                    </div>
+                    <div class="form-group">
+                        <label for="weather_longitude">Longitude</label>
+                        <input type="text" class="form-control" id="weather_longitude" placeholder="Longitude">
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <button type="button" class="btn btn-quantum" onclick="useWeatherLocation()">
+                            <i class="fas fa-location-arrow"></i> Use Current Location
+                        </button>
+                        <button type="button" class="btn btn-quantum-outline" onclick="syncFromScan()">
+                            <i class="fas fa-route"></i> Use Scan Coordinates
+                        </button>
+                    </div>
+                    <div id="weatherMap"></div>
+                    <p class="radar-meta mt-2">
+                        Radar overlay powered by RainViewer. Map tiles load once a location is set.
+                    </p>
+                </div>
+
+                <div class="weather-card">
+                    <h5>Forecast Modes</h5>
+                    <div class="forecast-buttons mb-3">
+                        <button class="btn btn-quantum" onclick="fetchWeather('1day')">1 Day</button>
+                        <button class="btn btn-quantum" onclick="fetchWeather('10day')">10 Day</button>
+                        <button class="btn btn-quantum" onclick="fetchWeather('hourly')">Hourly</button>
+                        <button class="btn btn-quantum" onclick="fetchWeather('80day')">80 Day Quantum</button>
+                    </div>
+                    <div id="weatherSummary" class="mb-3">
+                        <div class="weather-chip">Awaiting forecast...</div>
+                    </div>
+                    <div id="weatherEntanglement" class="mb-3"></div>
+                    <button class="btn btn-quantum-outline" onclick="fetchWeatherReport()">
+                        <i class="fas fa-brain"></i> Build LLM Weather Report
+                    </button>
+                </div>
+
+                <div class="weather-card quantum-panel">
+                    <h5>Quantum Radar Lab</h5>
+                    <div class="form-group">
+                        <label for="radarFocus">Radar Focus</label>
+                        <textarea class="form-control" id="radarFocus" rows="3" placeholder="e.g., storm shear near destination, fog risk, microburst watch"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="radarMode">Radar Mode</label>
+                        <select class="form-control" id="radarMode">
+                            <option value="route">Route Stability</option>
+                            <option value="storm">Storm Dynamics</option>
+                            <option value="visibility">Visibility + Fog</option>
+                            <option value="energy">Energy Gradient</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-quantum" onclick="fetchQuantumRadar()">
+                        <i class="fas fa-satellite-dish"></i> Generate Quantum Radar Brief
+                    </button>
+                    <div id="quantumRadarOutput" class="mt-3">
+                        <p class="text-muted">Quantum radar ideas and briefing will appear here.</p>
+                    </div>
+                </div>
+
+                <div class="weather-card">
+                    <h5>Quantum Weather Report</h5>
+                    <div id="weatherReport">
+                        <p class="text-muted">Generate a report to see route-focused forecasting and hazard windows.</p>
+                    </div>
+                </div>
+
+                <div class="weather-card">
+                    <h5>Road + Route Intelligence</h5>
+                    <p>Keep road scanning active while weather evolves. The weather engine syncs with your scan inputs to
+                       augment hazard detection, visibility risk, and arrival window planning.</p>
+                    <ul>
+                        <li>Color entanglement bits tie forecast certainty to your scan session.</li>
+                        <li>Hourly precipitation + wind shifts are mapped to road hazard windows.</li>
+                        <li>Long-range (80-day) outlooks are labeled as quantum extrapolations.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="modal fade" id="reportModal" tabindex="-1" aria-labelledby="reportModalLabel" aria-hidden="true">
@@ -9684,6 +9912,16 @@ def dashboard():
 
         var currentStep = 1;
 
+        function showTab(tabId) {
+            $('.tab-section').removeClass('active');
+            $('#' + tabId).addClass('active');
+            $('.sidebar .nav-link').removeClass('active');
+            $('.sidebar .nav-link[data-tab="' + tabId + '"]').addClass('active');
+            if (tabId === 'weatherTab') {
+                initWeatherMap();
+            }
+        }
+
         function showSection(step) {
             $('.form-section').removeClass('active');
             $('#' + step).addClass('active');
@@ -9703,12 +9941,45 @@ def dashboard():
                 navigator.geolocation.getCurrentPosition(function(position) {
                     $('#latitude').val(position.coords.latitude);
                     $('#longitude').val(position.coords.longitude);
+                    syncWeatherInputs(position.coords.latitude, position.coords.longitude);
                 }, function(error) {
                     alert("Error obtaining location: " + error.message);
                 });
             } else {
                 alert("Geolocation is not supported by this browser.");
             }
+        }
+
+        function syncWeatherInputs(lat, lon) {
+            if (lat && lon) {
+                $('#weather_latitude').val(lat);
+                $('#weather_longitude').val(lon);
+                updateWeatherMap(lat, lon);
+            }
+        }
+
+        function useWeatherLocation() {
+            if (!navigator.geolocation) {
+                alert("Geolocation is not supported by this browser.");
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(function(position) {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                syncWeatherInputs(lat, lon);
+            }, function(error) {
+                alert("Error obtaining location: " + error.message);
+            });
+        }
+
+        function syncFromScan() {
+            const lat = $('#latitude').val();
+            const lon = $('#longitude').val();
+            if (!lat || !lon) {
+                alert("Scan coordinates are empty.");
+                return;
+            }
+            syncWeatherInputs(lat, lon);
         }
 
         async function fetchStreetName(lat, lon) {
@@ -9737,6 +10008,7 @@ def dashboard():
                 $('#streetName').text("Fetching street name...");
                 const streetName = await fetchStreetName(lat, lon);
                 $('#streetName').text(streetName);
+                syncWeatherInputs(lat, lon);
                 showSection('step2');
             } else if(step === 2) {
                 showSection('step3');
@@ -9828,7 +10100,202 @@ def dashboard():
             $('table tbody').prepend(newRow);
         }
 
+        let weatherMap = null;
+        let weatherMarker = null;
+        let radarLayer = null;
+        let radarTimestamp = null;
+
+        function initWeatherMap() {
+            if (weatherMap) {
+                return;
+            }
+            weatherMap = L.map('weatherMap').setView([37.7749, -122.4194], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(weatherMap);
+        }
+
+        function updateWeatherMap(lat, lon) {
+            initWeatherMap();
+            const coords = [parseFloat(lat), parseFloat(lon)];
+            if (!weatherMarker) {
+                weatherMarker = L.marker(coords).addTo(weatherMap);
+            } else {
+                weatherMarker.setLatLng(coords);
+            }
+            weatherMap.setView(coords, 11);
+            loadRadarLayer();
+        }
+
+        async function loadRadarLayer() {
+            if (!weatherMap) {
+                return;
+            }
+            try {
+                const resp = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+                if (!resp.ok) {
+                    throw new Error('Radar feed unavailable');
+                }
+                const data = await resp.json();
+                const radarTimes = data?.radar?.past || [];
+                const latest = radarTimes.length ? radarTimes[radarTimes.length - 1].time : null;
+                if (!latest || latest === radarTimestamp) {
+                    return;
+                }
+                radarTimestamp = latest;
+                if (radarLayer) {
+                    weatherMap.removeLayer(radarLayer);
+                }
+                radarLayer = L.tileLayer(
+                    `https://tilecache.rainviewer.com/v2/radar/${latest}/256/{z}/{x}/{y}/2/1_1.png`,
+                    { opacity: 0.6 }
+                );
+                radarLayer.addTo(weatherMap);
+            } catch (error) {
+                console.warn('Radar overlay failed', error);
+            }
+        }
+
+        function getWeatherCoordinates() {
+            const lat = $('#weather_latitude').val() || $('#latitude').val();
+            const lon = $('#weather_longitude').val() || $('#longitude').val();
+            if (!lat || !lon) {
+                alert("Set latitude and longitude first.");
+                return null;
+            }
+            return { lat, lon };
+        }
+
+        async function fetchWeather(mode) {
+            const coords = getWeatherCoordinates();
+            if (!coords) { return; }
+            const payload = {
+                latitude: coords.lat,
+                longitude: coords.lon,
+                mode: mode
+            };
+            $('#weatherSummary').html('<div class="weather-chip">Fetching forecast...</div>');
+            try {
+                const response = await fetch('/api/weather_forecast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    $('#weatherSummary').html(`<div class="weather-chip">Error: ${err.error || 'fetch failed'}</div>`);
+                    return;
+                }
+                const data = await response.json();
+                const summary = data.summary || {};
+                const ent = data.entanglement || {};
+                const entHex = ent.hex || '#00adb5';
+                const longRange = data.long_range ? `<div class="mt-2">${data.long_range.headline || ''}</div>` : '';
+                $('#weatherSummary').html(`
+                    <div class="weather-chip">Now: ${summary.current_temp_c ?? '--'}°C · ${summary.current_weather || 'Unknown'}</div>
+                    <div class="mt-2">Today: ${summary.today_low_c ?? '--'}°C → ${summary.today_high_c ?? '--'}°C · ${summary.today_weather || 'Unknown'}</div>
+                    <div class="mt-1">Wind: ${summary.wind_speed ?? '--'} m/s (gust ${summary.wind_gusts ?? '--'})</div>
+                    ${longRange}
+                `);
+                $('#weatherEntanglement').html(`
+                    <div class="weather-chip" style="border-color:${entHex}; color:${entHex};">
+                        <span class="badge" style="background:${entHex}; width:14px; height:14px; border-radius:50%; display:inline-block;"></span>
+                        Entanglement ${ent.qid25?.code || ''}
+                    </div>
+                `);
+                syncWeatherInputs(coords.lat, coords.lon);
+            } catch (error) {
+                console.error(error);
+                $('#weatherSummary').html('<div class="weather-chip">Weather fetch failed.</div>');
+            }
+        }
+
+        async function fetchWeatherReport() {
+            const coords = getWeatherCoordinates();
+            if (!coords) { return; }
+            const destination = $('#destination').val();
+            $('#weatherReport').html('<p>Building LLM report...</p>');
+            try {
+                const response = await fetch('/api/weather_report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
+                    body: JSON.stringify({
+                        latitude: coords.lat,
+                        longitude: coords.lon,
+                        destination: destination,
+                        mode: '10day'
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    $('#weatherReport').html(`<p>Error: ${err.error || 'report failed'}</p>`);
+                    return;
+                }
+                const data = await response.json();
+                const report = data.report || {};
+                const entHex = data.entanglement?.hex || '#00adb5';
+                const windows = (report.hazard_windows || []).map(w => `<li>${w.start_day || ''}-${w.end_day || ''}: ${w.risk || ''} (${w.confidence || ''})</li>`).join('');
+                const prep = (report.prep_list || []).map(item => `<li>${item}</li>`).join('');
+                $('#weatherReport').html(`
+                    <h6 style="color:${entHex};">${report.headline || 'Quantum Weather Report'}</h6>
+                    <p><strong>Road Risk:</strong> ${report.road_risk || 'Unknown'}</p>
+                    <p>${report.route_guidance || ''}</p>
+                    ${windows ? `<p><strong>Hazard Windows</strong></p><ul>${windows}</ul>` : ''}
+                    ${prep ? `<p><strong>Prep List</strong></p><ul>${prep}</ul>` : ''}
+                `);
+            } catch (error) {
+                console.error(error);
+                $('#weatherReport').html('<p>Weather report failed.</p>');
+            }
+        }
+
+        async function fetchQuantumRadar() {
+            const coords = getWeatherCoordinates();
+            if (!coords) { return; }
+            const focus = $('#radarFocus').val();
+            const mode = $('#radarMode').val();
+            $('#quantumRadarOutput').html('<p>Generating quantum radar briefing...</p>');
+            try {
+                const response = await fetch('/api/quantum_radar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
+                    body: JSON.stringify({
+                        latitude: coords.lat,
+                        longitude: coords.lon,
+                        focus: focus,
+                        mode: mode
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    $('#quantumRadarOutput').html(`<p>Error: ${err.error || 'radar failed'}</p>`);
+                    return;
+                }
+                const data = await response.json();
+                const briefing = data.briefing || {};
+                const ideas = (data.ideas || []).map(idea => `
+                    <div class="radar-idea">
+                        <h6>${idea.title || ''}</h6>
+                        <div>${idea.physics || ''}</div>
+                        <div><strong>Pennylane:</strong> ${idea.pennylane || ''}</div>
+                        <div><strong>RAG:</strong> ${idea.rag || ''}</div>
+                    </div>
+                `).join('');
+                $('#quantumRadarOutput').html(`
+                    <div class="weather-chip mb-2">Radar Status: ${briefing.radar_status || 'Unknown'} · ${briefing.confidence || 'Unknown'}</div>
+                    <h6>${briefing.headline || 'Quantum Radar Brief'}</h6>
+                    <p>${briefing.signal_notes || ''}</p>
+                    <div>${ideas}</div>
+                `);
+            } catch (error) {
+                console.error(error);
+                $('#quantumRadarOutput').html('<p>Quantum radar briefing failed.</p>');
+            }
+        }
+
         $(document).ready(function() {
+            showTab('scanTab');
             showSection('step1');
         });
     </script>
@@ -9954,6 +10421,320 @@ async def reverse_geocode_route():
     return jsonify({"street_name": location}), 200
 
     
+
+# =========================
+# Weather + Route Forecasting
+# =========================
+
+_OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
+_RADAR_FEED_URL = "https://api.rainviewer.com/public/weather-maps.json"
+_WEATHER_HOURLY_FIELDS = ",".join([
+    "temperature_2m",
+    "apparent_temperature",
+    "precipitation",
+    "weathercode",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+    "visibility",
+])
+_WEATHER_DAILY_FIELDS = ",".join([
+    "weathercode",
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "precipitation_sum",
+    "wind_speed_10m_max",
+    "wind_gusts_10m_max",
+    "uv_index_max",
+])
+_WEATHER_CURRENT_FIELDS = ",".join([
+    "temperature_2m",
+    "apparent_temperature",
+    "precipitation",
+    "weathercode",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+])
+
+def _weather_entanglement(user_id: int | None) -> dict:
+    uid = str(user_id) if user_id is not None else None
+    return _WEATHER_COLOR.sample(uid=uid)
+
+def _open_meteo_params(mode: str) -> dict:
+    mode = (mode or "hourly").lower()
+    if mode == "1day":
+        return {"forecast_days": 1, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+    if mode == "10day":
+        return {"forecast_days": 10, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+    if mode == "80day":
+        return {"forecast_days": 16, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+    return {"forecast_days": 2, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+
+async def _fetch_open_meteo_async(lat: float, lon: float, mode: str) -> dict:
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": "auto",
+        "current": _WEATHER_CURRENT_FIELDS,
+    }
+    params.update(_open_meteo_params(mode))
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(_OPEN_METEO_BASE_URL, params=params)
+        r.raise_for_status()
+        data = r.json()
+    return {
+        "source": "open-meteo",
+        "mode": mode,
+        "params": params,
+        "forecast": data,
+    }
+
+def _summarize_open_meteo(data: dict) -> dict:
+    current = data.get("current") or {}
+    daily = data.get("daily") or {}
+    daily_codes = daily.get("weathercode") or []
+    daily_max = daily.get("temperature_2m_max") or []
+    daily_min = daily.get("temperature_2m_min") or []
+    summary = {
+        "current_temp_c": current.get("temperature_2m"),
+        "current_apparent_c": current.get("apparent_temperature"),
+        "current_weather": _weather_code_label(current.get("weathercode")),
+        "wind_speed": current.get("wind_speed_10m"),
+        "wind_gusts": current.get("wind_gusts_10m"),
+        "today_high_c": daily_max[0] if daily_max else None,
+        "today_low_c": daily_min[0] if daily_min else None,
+        "today_weather": _weather_code_label(daily_codes[0] if daily_codes else None),
+    }
+    return summary
+
+def _quantum_long_range_outlook(
+    location_hint: str,
+    entanglement: dict,
+    forecast: dict,
+) -> dict:
+    daily = (forecast.get("daily") or {})
+    prompt = (
+        "You are a quantum weather synthesis engine. Use the following open-meteo daily data "
+        "to project an 80-day outlook. Provide strictly JSON with keys: "
+        "headline, trend_summary, risk_windows (list of objects with start_day, end_day, risk, confidence), "
+        "road_notes, and method. Use the entanglement color as a thematic anchor.\n\n"
+        f"Location hint: {location_hint}\n"
+        f"Entanglement: {json.dumps(entanglement)}\n"
+        f"Daily data: {json.dumps(daily)}"
+    )
+    payload = _call_llm(prompt, temperature=0.35, model=os.getenv("WEATHER_LLM_MODEL"))
+    if isinstance(payload, dict):
+        payload["source"] = "llm-quantum-extrapolation"
+        return payload
+    highs = daily.get("temperature_2m_max") or []
+    lows = daily.get("temperature_2m_min") or []
+    precip = daily.get("precipitation_sum") or []
+    avg_high = round(sum(highs) / max(1, len(highs)), 1) if highs else None
+    avg_low = round(sum(lows) / max(1, len(lows)), 1) if lows else None
+    avg_precip = round(sum(precip) / max(1, len(precip)), 1) if precip else None
+    return {
+        "source": "heuristic-extrapolation",
+        "headline": "Long-range outlook derived from recent 16-day trends",
+        "trend_summary": f"Average highs {avg_high}°C, lows {avg_low}°C with precipitation avg {avg_precip}mm.",
+        "risk_windows": [],
+        "road_notes": "Use this 80-day view as a directional signal only; refine with daily updates.",
+        "method": "Heuristic projection from open-meteo daily series.",
+    }
+
+def _quantum_radar_ideas(entanglement: dict, summary: dict) -> list[dict]:
+    return [
+        {
+            "title": "RGB Qubit Prism Lattice",
+            "physics": "Encode radar returns into RGB colorbits and apply entangled phase shifts for micro-front detection.",
+            "pennylane": "Use 3-qubit variational color mixer with shared phase gates.",
+            "rag": "Ground each sweep with forecast summaries to constrain noise.",
+        },
+        {
+            "title": "Hue Interference Waveguide",
+            "physics": "Treat hue shifts as interference fringes; track storm shear by phase drift.",
+            "pennylane": "Phase kickback circuit with trainable interference offsets.",
+            "rag": "Align waveguide tuning to Open-Meteo wind gust bands.",
+        },
+        {
+            "title": "Chroma Collapse Scanner",
+            "physics": "Collapse chroma in high-entropy radar cells to expose hail cores.",
+            "pennylane": "Amplitude damping channel per colorbit to simulate collapse.",
+            "rag": "Cross-check with precipitation totals and visibility drops.",
+        },
+        {
+            "title": "Spectral Entanglement Drift",
+            "physics": "Bind RGB entanglement to temperature gradients to predict fog bands.",
+            "pennylane": "Entangled Bell pairs mapped to thermal gradient encodings.",
+            "rag": "Use daily min/max swings as drift constraints.",
+        },
+        {
+            "title": "Quantum Radar Memory Weave",
+            "physics": "Persist a memory of radar echoes to reduce false positives in road hazard scans.",
+            "pennylane": "Recurrent quantum circuit with shared RGB ancilla.",
+            "rag": "Anchor memory to the most recent forecast summary.",
+        },
+    ]
+
+@app.route("/api/weather_forecast", methods=["POST"])
+async def weather_forecast_route():
+    if "username" not in session:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    mode = bleach.clean(str(data.get("mode") or "hourly"), strip=True).lower()
+    try:
+        lat_f = parse_safe_float(lat)
+        lon_f = parse_safe_float(lon)
+    except Exception:
+        return jsonify({"error": "Invalid latitude or longitude"}), 400
+    username = session.get("username", "")
+    user_id = get_user_id(username) if username else None
+    try:
+        payload = await _fetch_open_meteo_async(lat_f, lon_f, mode)
+    except Exception as exc:
+        logger.exception("open-meteo fetch failed")
+        return jsonify({"error": f"Weather fetch failed: {exc}"}), 502
+    entanglement = _weather_entanglement(user_id)
+    summary = _summarize_open_meteo(payload["forecast"])
+    outlook = None
+    if mode == "80day":
+        outlook = _quantum_long_range_outlook(
+            location_hint=f"lat {lat_f}, lon {lon_f}",
+            entanglement=entanglement,
+            forecast=payload["forecast"],
+        )
+    return jsonify({
+        "mode": mode,
+        "source": payload["source"],
+        "forecast": payload["forecast"],
+        "summary": summary,
+        "entanglement": entanglement,
+        "long_range": outlook,
+        "radar_source": "rainviewer",
+    })
+
+@app.route("/api/weather_report", methods=["POST"])
+async def weather_report_route():
+    if "username" not in session:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    mode = bleach.clean(str(data.get("mode") or "10day"), strip=True).lower()
+    destination = bleach.clean(str(data.get("destination", "")), strip=True)
+    destination = clean_text(destination, 240)
+    try:
+        lat_f = parse_safe_float(lat)
+        lon_f = parse_safe_float(lon)
+    except Exception:
+        return jsonify({"error": "Invalid latitude or longitude"}), 400
+    is_allowed, analysis = await weather_phf_filter_input(
+        f"destination={destination}; mode={mode}"
+    )
+    if not is_allowed:
+        return jsonify({
+            "error": "Input contains disallowed content.",
+            "details": analysis,
+        }), 400
+    username = session.get("username", "")
+    user_id = get_user_id(username) if username else None
+    try:
+        payload = await _fetch_open_meteo_async(lat_f, lon_f, mode)
+    except Exception as exc:
+        logger.exception("open-meteo fetch failed")
+        return jsonify({"error": f"Weather fetch failed: {exc}"}), 502
+    entanglement = _weather_entanglement(user_id)
+    summary = _summarize_open_meteo(payload["forecast"])
+    prompt = (
+        "Create a weather+route report for a road scanning dashboard. "
+        "Use the open-meteo forecast and current conditions. Provide STRICT JSON with keys: "
+        "headline, road_risk, route_guidance, hazard_windows, prep_list, and entanglement_bits. "
+        "Focus on practical driving insights, weather radar signals, and confidence levels.\n\n"
+        f"Destination: {destination or 'unknown'}\n"
+        f"Entanglement: {json.dumps(entanglement)}\n"
+        f"Summary: {json.dumps(summary)}\n"
+        f"Forecast: {json.dumps(payload['forecast'].get('daily') or {})}"
+    )
+    report = _call_llm(prompt, temperature=0.25, model=os.getenv("WEATHER_LLM_MODEL"))
+    if not isinstance(report, dict):
+        report = {
+            "headline": "Weather synthesis ready",
+            "road_risk": "Moderate: watch for precipitation and wind shifts.",
+            "route_guidance": "Use hourly updates to refine departure windows.",
+            "hazard_windows": [],
+            "prep_list": ["Check tires and visibility gear", "Plan alternates if rain bands persist"],
+            "entanglement_bits": entanglement,
+        }
+    return jsonify({
+        "mode": mode,
+        "source": payload["source"],
+        "summary": summary,
+        "entanglement": entanglement,
+        "report": report,
+        "radar_source": "rainviewer",
+    })
+
+@app.route("/api/quantum_radar", methods=["POST"])
+async def quantum_radar_route():
+    if "username" not in session:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    focus = bleach.clean(str(data.get("focus") or ""), strip=True)
+    mode = bleach.clean(str(data.get("mode") or "route"), strip=True).lower()
+    focus = clean_text(focus, 260)
+    try:
+        lat_f = parse_safe_float(lat)
+        lon_f = parse_safe_float(lon)
+    except Exception:
+        return jsonify({"error": "Invalid latitude or longitude"}), 400
+    is_allowed, analysis = await weather_phf_filter_input(
+        f"focus={focus}; mode={mode}"
+    )
+    if not is_allowed:
+        return jsonify({
+            "error": "Input contains disallowed content.",
+            "details": analysis,
+        }), 400
+    username = session.get("username", "")
+    user_id = get_user_id(username) if username else None
+    try:
+        payload = await _fetch_open_meteo_async(lat_f, lon_f, "10day")
+    except Exception as exc:
+        logger.exception("open-meteo fetch failed")
+        return jsonify({"error": f"Weather fetch failed: {exc}"}), 502
+    entanglement = _weather_entanglement(user_id)
+    summary = _summarize_open_meteo(payload["forecast"])
+    ideas = _quantum_radar_ideas(entanglement, summary)
+    prompt = (
+        "Generate a quantum radar briefing for a road scanner. Output STRICT JSON "
+        "with keys: headline, radar_status, confidence, signal_notes, and colorbit_plan. "
+        "Use the provided entanglement and forecast summary for grounding.\n\n"
+        f"Focus: {focus or 'general'}\n"
+        f"Mode: {mode}\n"
+        f"Entanglement: {json.dumps(entanglement)}\n"
+        f"Summary: {json.dumps(summary)}\n"
+        f"Ideas: {json.dumps(ideas)}"
+    )
+    briefing = _call_llm(prompt, temperature=0.2, model=os.getenv("WEATHER_LLM_MODEL"))
+    if not isinstance(briefing, dict):
+        briefing = {
+            "headline": "Quantum radar briefing ready",
+            "radar_status": "Stable",
+            "confidence": "Moderate",
+            "signal_notes": "Monitor wind gust spikes and precipitation bands.",
+            "colorbit_plan": entanglement,
+        }
+    return jsonify({
+        "focus": focus,
+        "mode": mode,
+        "summary": summary,
+        "entanglement": entanglement,
+        "ideas": ideas,
+        "briefing": briefing,
+        "radar_source": _RADAR_FEED_URL,
+    })
 
 
 # =========================
