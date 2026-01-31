@@ -5,7 +5,7 @@ import sqlite3
 import psutil
 from flask import (
     Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, make_response, Response, stream_with_context)
+    session, jsonify, flash, make_response, Response, stream_with_context, abort)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
@@ -17,7 +17,8 @@ from cryptography.hazmat.backends import default_backend
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type
-from datetime import timedelta, datetime
+import datetime as _dt
+from datetime import timedelta, datetime, timezone
 from markdown2 import markdown
 import bleach
 import geonamescache
@@ -2353,6 +2354,7 @@ X2_CAROUSEL_MAX_DWELL = float(os.environ.get("RGN_X2_CAROUSEL_MAX_DWELL", "22.0"
 CAROUSEL_MIN_DWELL = X2_CAROUSEL_MIN_DWELL
 CAROUSEL_MAX_DWELL = X2_CAROUSEL_MAX_DWELL
 
+X2_DEFAULT_MODEL = os.environ.get("RGN_X2_DEFAULT_MODEL", "gpt-5.2-thinking")
 X2_MAX_ITEMS = int(os.environ.get("RGN_X2_CAROUSEL_MAX_ITEMS", "80"))
 X2_MAX_STORE = int(os.environ.get("RGN_X2_MAX_STORE", "2500"))
 
@@ -2547,6 +2549,65 @@ def x2_fetch_user_tweets(bearer: str, x_user_id: str, max_results: int = 80, pag
             time.sleep((2 ** attempt) * HTTP_BACKOFF)
     raise RuntimeError(str(last_err) if last_err else "X fetch failed")
 
+def _x2_fetch_test_payload(seed: Optional[int] = None, max_results: int = 20) -> Dict[str, Any]:
+    rng = random.Random(seed or 42)
+    authors = ["roadscan_ai", "trafficwire", "stormline", "cautious_commute", "nightdrive_lab"]
+    phrases = [
+        "Bridge icing reported near the east span.",
+        "Visibility dropping on I-5; keep following distance.",
+        "Emergency responders clearing debris; expect delays.",
+        "Wet leaves causing traction loss at downhill turns.",
+        "Construction merge zone shifted overnight.",
+        "Fog pockets likely after midnight—use low beams.",
+        "Hydroplaning risk rising with heavy rain bands.",
+    ]
+    items = []
+    count = max(5, min(80, int(max_results)))
+    base = datetime.utcnow().replace(tzinfo=timezone.utc)
+    for i in range(count):
+        ts = base - timedelta(minutes=7 * i)
+        author = rng.choice(authors)
+        text = rng.choice(phrases)
+        items.append(
+            {
+                "id": f"test_{seed or 42}_{i}",
+                "text": f"{text} [synthetic #{i+1}]",
+                "created_at": ts.isoformat().replace("+00:00", "Z"),
+                "author_id": author,
+            }
+        )
+    return {
+        "data": items,
+        "meta": {
+            "result_count": len(items),
+            "newest_id": items[0]["id"] if items else None,
+            "oldest_id": items[-1]["id"] if items else None,
+        },
+    }
+
+def _x2_fetch_payload_from_env(bearer: str, x_user_id: str, max_results: int = 80) -> Dict[str, Any]:
+    test_api = (os.getenv("RGN_X_TEST_API") or "").strip()
+    if not test_api:
+        return x2_fetch_user_tweets(bearer=bearer, x_user_id=x_user_id, max_results=max_results)
+    if test_api.lower() in {"1", "true", "synthetic", "local"}:
+        seed = None
+        try:
+            seed = int(os.getenv("RGN_X_TEST_SEED", "42"))
+        except Exception:
+            seed = 42
+        return _x2_fetch_test_payload(seed=seed, max_results=max_results)
+    if test_api.startswith("http://") or test_api.startswith("https://"):
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.get(test_api)
+                resp.raise_for_status()
+                payload = resp.json()
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            logger.exception("RGN_X_TEST_API fetch failed; falling back to live X fetch.")
+    return x2_fetch_user_tweets(bearer=bearer, x_user_id=x_user_id, max_results=max_results)
+
 
 def x2_search_recent(bearer: str, query: str, max_results: int = 50, next_token: Optional[str] = None) -> Dict[str, Any]:
     """X API v2: GET /2/tweets/search/recent"""
@@ -2626,17 +2687,17 @@ def x2_upsert_tweets(owner_user_id: int, rows: List[Dict[str, str]]) -> int:
         conn.execute("BEGIN")
         for r in rows:
             conn.execute(
-                "INSERT INTO x2_tweets(owner_user_id,tid,author,created_at,text,src,inserted_at) "
+                "INSERT INTO x2_tweets(user_id,tid,author,created_at,text,src,inserted_at) "
                 "VALUES(?,?,?,?,?,?,?) "
-                "ON CONFLICT(owner_user_id,tid) DO UPDATE SET author=excluded.author, created_at=excluded.created_at, "
+                "ON CONFLICT(user_id,tid) DO UPDATE SET author=excluded.author, created_at=excluded.created_at, "
                 "text=excluded.text, src=excluded.src, inserted_at=excluded.inserted_at",
                 (uid, r.get("tid", ""), r.get("author", ""), r.get("created_at", ""), r.get("text", ""), r.get("src", ""), _utc_iso()),
             )
         conn.commit()
         conn.execute(
-            "DELETE FROM x2_tweets WHERE owner_user_id=? AND tid NOT IN ("
-            "SELECT tid FROM x2_tweets WHERE owner_user_id=? ORDER BY inserted_at DESC LIMIT ?)",
-            (uid, uid, MAX_TWEETS_STORE),
+            "DELETE FROM x2_tweets WHERE user_id=? AND tid NOT IN ("
+            "SELECT tid FROM x2_tweets WHERE user_id=? ORDER BY inserted_at DESC LIMIT ?)",
+            (uid, uid, X2_MAX_STORE),
         )
         conn.commit()
     return len(rows)
@@ -2646,7 +2707,7 @@ def x2_list_tweets(owner_user_id: int, limit: int = 800) -> List[sqlite3.Row]:
     uid = int(owner_user_id)
     with _x2_db() as conn:
         rows = conn.execute(
-            "SELECT tid,author,created_at,text,src,inserted_at FROM x2_tweets WHERE owner_user_id=? "
+            "SELECT tid,author,created_at,text,src,inserted_at FROM x2_tweets WHERE user_id=? "
             "ORDER BY inserted_at DESC LIMIT ?",
             (uid, int(limit)),
         ).fetchall()
@@ -2659,7 +2720,7 @@ def x2_get_label(owner_user_id: int, tid: str) -> Optional[sqlite3.Row]:
     with _x2_db() as conn:
         return conn.execute(
             "SELECT tid,neg,sar,tone,edu,truth,cool,click,incl,ext,summary,tags_json,title,raw_json,model,created_at "
-            "FROM x2_labels WHERE owner_user_id=? AND tid=?",
+            "FROM x2_labels WHERE user_id=? AND tid=?",
             (uid, tid),
         ).fetchone()
 
@@ -2669,8 +2730,8 @@ def x2_unlabeled_ids(owner_user_id: int, limit: int = 24) -> List[str]:
     with _x2_db() as conn:
         rows = conn.execute(
             "SELECT t.tid FROM x2_tweets t LEFT JOIN x2_labels l "
-            "ON t.owner_user_id=l.owner_user_id AND t.tid=l.tid "
-            "WHERE t.owner_user_id=? AND l.tid IS NULL "
+            "ON t.user_id=l.user_id AND t.tid=l.tid "
+            "WHERE t.user_id=? AND l.tid IS NULL "
             "ORDER BY t.inserted_at DESC LIMIT ?",
             (uid, int(limit)),
         ).fetchall()
@@ -2691,9 +2752,9 @@ def x2_upsert_label(owner_user_id: int, tid: str, obj: Dict[str, Any], model: st
     raw_json = json.dumps(obj, ensure_ascii=False)
     with _x2_db() as conn:
         conn.execute(
-            "INSERT INTO x2_labels(owner_user_id,tid,neg,sar,tone,edu,truth,cool,click,incl,ext,summary,tags_json,title,raw_json,model,created_at) "
+            "INSERT INTO x2_labels(user_id,tid,neg,sar,tone,edu,truth,cool,click,incl,ext,summary,tags_json,title,raw_json,model,created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(owner_user_id,tid) DO UPDATE SET "
+            "ON CONFLICT(user_id,tid) DO UPDATE SET "
             "neg=excluded.neg,sar=excluded.sar,tone=excluded.tone,edu=excluded.edu,truth=excluded.truth,cool=excluded.cool,"
             "click=excluded.click,incl=excluded.incl,ext=excluded.ext,summary=excluded.summary,tags_json=excluded.tags_json,"
             "title=excluded.title,raw_json=excluded.raw_json,model=excluded.model,created_at=excluded.created_at",
@@ -2983,7 +3044,7 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
     try:
         with _x2_db() as conn:
             prow = conn.execute(
-                "SELECT tags_json FROM x2_posts WHERE owner_user_id=? ORDER BY created_at DESC LIMIT 40",
+                "SELECT tags_json FROM x2_posts WHERE user_id=? ORDER BY created_at DESC LIMIT 40",
                 (uid,),
             ).fetchall()
         for r in prow or []:
@@ -3002,7 +3063,7 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
     try:
         with _x2_db() as conn:
             fb = conn.execute(
-                "SELECT meta_json,created_at FROM x2_events WHERE owner_user_id=? AND kind='skip' ORDER BY created_at DESC LIMIT 80",
+                "SELECT meta_json,created_at FROM x2_events WHERE user_id=? AND kind='skip' ORDER BY created_at DESC LIMIT 80",
                 (uid,),
             ).fetchall()
         for mj, ts in fb or []:
@@ -3029,8 +3090,8 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
             "SELECT t.tid,t.author,t.created_at,t.text,t.src,t.inserted_at,"
             "l.neg,l.sar,l.tone,l.edu,l.truth,l.cool,l.click,l.incl,l.ext,l.summary,l.tags_json,l.title "
             "FROM x2_tweets t JOIN x2_labels l "
-            "ON t.owner_user_id=l.owner_user_id AND t.tid=l.tid "
-            "WHERE t.owner_user_id=? "
+            "ON t.user_id=l.user_id AND t.tid=l.tid "
+            "WHERE t.user_id=? "
             "ORDER BY t.inserted_at DESC LIMIT 900",
             (uid,),
         ).fetchall()
@@ -3340,6 +3401,16 @@ def sanitize_tags_csv(raw: str, max_tags: int = 50) -> str:
     parts = [p for p in parts if p]
     out = ",".join(parts[:max_tags])
     return out[:500]
+
+def _mask_secret(val: str, keep: int = 4) -> str:
+    if not val:
+        return ""
+    clean = str(val).strip()
+    if not clean:
+        return ""
+    if len(clean) <= keep:
+        return "•" * len(clean)
+    return f"{clean[:keep]}••••••"
     
 def _blog_ctx(field: str, rid: Optional[int] = None) -> dict:
     return build_hd_ctx(domain="blog", field=field, rid=rid)
@@ -3386,6 +3457,18 @@ def _get_userid_or_abort() -> int:
         return -1
     uid = get_user_id(session['username'])
     return int(uid or -1)
+
+def _require_user_id_or_redirect():
+    uid = _get_userid_or_abort()
+    if uid < 0:
+        return redirect(url_for("login"))
+    return uid
+
+def _require_user_id_or_abort() -> int:
+    uid = _get_userid_or_abort()
+    if uid < 0:
+        abort(401)
+    return uid
 
 def blog_get_by_slug(slug: str, allow_any_status: bool=False) -> Optional[dict]:
     if not _valid_slug(slug): return None
@@ -11533,6 +11616,7 @@ def x_dashboard():
     oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
     oai_key = vault_get(uid, "openai_key", "")
     is_admin = False
+    x_test_mode = bool(os.getenv("RGN_X_TEST_API"))
     try:
         _require_admin()
         is_admin = True
@@ -11676,6 +11760,7 @@ def x_dashboard():
         <span class="pill">X user: <span class="kbd">{{ x_user or "—" }}</span></span>
         <span class="pill">bearer: <span class="kbd">{{ x_bearer_mask or "—" }}</span></span>
         <span class="pill">OpenAI: <span class="kbd">{{ oai_model }}</span></span>
+        <span class="pill">Test feed: <span class="kbd">{{ "on" if x_test_mode else "off" }}</span></span>
         {% if is_admin %}<a class="btn" href="/x/admin">Admin</a>{% endif %}
       </div>
     </div>
@@ -11730,6 +11815,23 @@ def x_dashboard():
           <div class="bars" id="bars"></div>
           <div class="hr"></div>
           <div class="small" id="summary"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>X Feed Next Ideas</h3>
+        <div class="body">
+          <div class="small">
+            <ol style="padding-left:18px; margin:0;">
+              <li><strong>Route pulse matching:</strong> boost tweets that mention the active route corridor or waypoints.</li>
+              <li><strong>Hazard authority weighting:</strong> score posts higher when they cite DOT, weather, or responder sources.</li>
+              <li><strong>Signal decay lanes:</strong> auto-archive items as they age, with a recency shelf for live alerts.</li>
+              <li><strong>Driver calm mode:</strong> soften language + color for high stress windows to reduce panic.</li>
+            </ol>
+          </div>
+          <div class="hr"></div>
+          <div class="small">
+            Set <span class="kbd">RGN_X_TEST_API=synthetic</span> or a test URL to inject synthetic feed data for validation.
+          </div>
         </div>
       </div>
     </div>
@@ -11926,6 +12028,7 @@ def x_dashboard():
         oai_model=oai_model or X2_DEFAULT_MODEL,
         oai_key_mask=_mask_secret(oai_key),
         is_admin=is_admin,
+        x_test_mode=x_test_mode,
     )
 
 @app.route("/x/api/settings", methods=["POST"])
@@ -12009,7 +12112,7 @@ def x_api_fetch():
         max_results = 90
 
     try:
-        payload = x2_fetch_user_tweets(bearer=bearer, user_id=x_user_id, max_results=max_results)
+        payload = _x2_fetch_payload_from_env(bearer=bearer, x_user_id=x_user_id, max_results=max_results)
 
         # Parse + sanitize before storing
         rows = x2_parse_tweets(payload, src="user") or []
