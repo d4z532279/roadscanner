@@ -9279,14 +9279,34 @@ def dashboard():
         return redirect(url_for('login'))
     username = session['username']
     user_id = get_user_id(username)
-    reports = get_hazard_reports(user_id)
+    if user_id is None:
+        session.clear()
+        return redirect(url_for('login'))
+    try:
+        reports = get_hazard_reports(user_id)
+    except sqlite3.Error:
+        logger.exception("Failed to load hazard reports for dashboard")
+        reports = []
     csrf_token = generate_csrf()
-    preferred_model = get_user_preferred_model(user_id)
+    try:
+        preferred_model = get_user_preferred_model(user_id)
+    except sqlite3.Error:
+        logger.exception("Failed to load preferred model for dashboard")
+        preferred_model = "openai"
 
     # --- X Social Safety module status (per-user vault) ---
-    x_user_id = vault_get(user_id, "x2_user_id", "")
-    x_has_bearer = bool(vault_get(user_id, "x2_bearer_token", ""))
-    x_configured = bool(x_user_id and x_has_bearer)
+    try:
+        x_user_id = vault_get(user_id, "x2_user_id", "")
+        x_has_bearer = bool(vault_get(user_id, "x2_bearer_token", ""))
+        x_configured = bool(x_user_id and x_has_bearer)
+    except Exception:
+        x_user_id = ""
+        x_configured = False
+
+    x_dashboard_url = url_for("x_dashboard") if "x_dashboard" in app.view_functions else None
+    admin_blog_backup_url = url_for("admin_blog_backup_page") if "admin_blog_backup_page" in app.view_functions else None
+    admin_local_llm_url = url_for("admin_local_llm_page") if "admin_local_llm_page" in app.view_functions else None
+    local_llm_url = url_for("local_llm") if "local_llm" in app.view_functions else None
 
     return render_template_string("""
 <!DOCTYPE html>
@@ -9478,15 +9498,21 @@ def dashboard():
         <a href="{{ url_for('settings') }}">
             <i class="fas fa-cogs"></i> <span>Settings</span>
         </a>
-        <a href="{{ url_for('x_dashboard') }}">
+        {% if x_dashboard_url %}
+        <a href="{{ x_dashboard_url }}">
             <i class="fa-brands fa-x-twitter"></i> <span>X Social Safety</span>
         </a>
-        <a href="{{ url_for('admin_blog_backup_page') }}">
+        {% endif %}
+        {% if admin_blog_backup_url %}
+        <a href="{{ admin_blog_backup_url }}">
             <i class="fas fa-database"></i> <span>Blog Backup</span>
         </a>
-        <a href="{{ url_for('admin_local_llm_page') }}">
+        {% endif %}
+        {% if admin_local_llm_url %}
+        <a href="{{ admin_local_llm_url }}">
             <i class="fas fa-microchip"></i> <span>Local Llama</span>
         </a>
+        {% endif %}
         {% endif %}
         <a href="{{ url_for('logout') }}">
             <i class="fas fa-sign-out-alt"></i> <span>Logout</span>
@@ -9496,21 +9522,31 @@ def dashboard():
     <div class="content">
             <div class="quick-apps">
                 <div class="quick-left">
-                    <a class="chip" href="{{ url_for('x_dashboard') }}">
+                    {% if x_dashboard_url %}
+                    <a class="chip" href="{{ x_dashboard_url }}">
                         <i class="fa-brands fa-x-twitter"></i> X Social Safety
                     </a>
+                    {% else %}
+                    <span class="chip">
+                        <i class="fa-brands fa-x-twitter"></i> X Social Safety
+                    </span>
+                    {% endif %}
                     <span class="chip-status {{ 'ok' if x_configured else 'warn' }}">
                         {{ 'configured' if x_configured else 'needs setup' }}
                     </span>
-                    {% if not x_configured %}
-                    <a class="chip ghost" href="{{ url_for('x_dashboard') }}#settings">
+                    {% if not x_configured and x_dashboard_url %}
+                    <a class="chip ghost" href="{{ x_dashboard_url }}#settings">
                         Configure
                     </a>
                     {% endif %}
                 </div>
                 <div class="quick-right">
-                    <a class="chip ghost" href="{{ url_for('admin_blog_backup_page') }}"><i class="fa-solid fa-box-archive"></i> Blog Backup</a>
-                    <a class="chip ghost" href="{{ url_for('local_llm') }}"><i class="fa-solid fa-robot"></i> Local LLM</a>
+                    {% if admin_blog_backup_url %}
+                    <a class="chip ghost" href="{{ admin_blog_backup_url }}"><i class="fa-solid fa-box-archive"></i> Blog Backup</a>
+                    {% endif %}
+                    {% if local_llm_url %}
+                    <a class="chip ghost" href="{{ local_llm_url }}"><i class="fa-solid fa-robot"></i> Local LLM</a>
+                    {% endif %}
                 </div>
             </div>
 
@@ -9819,7 +9855,11 @@ def dashboard():
                                   grok_ready=bool(os.getenv('GROK_API_KEY')),
                                   llama_ready=llama_local_ready(),
                                   x_configured=x_configured,
-                                  x_user_id=x_user_id)
+                                  x_user_id=x_user_id,
+                                  x_dashboard_url=x_dashboard_url,
+                                  admin_blog_backup_url=admin_blog_backup_url,
+                                  admin_local_llm_url=admin_local_llm_url,
+                                  local_llm_url=local_llm_url)
 
 
 def calculate_harm_level(result):
@@ -11075,6 +11115,8 @@ def _restore_legacy_endpoints():
     # --- Risk API (compat aliases) ---
     if "api_llm_route" in globals():
         _maybe_add_url_rule("/api/risk/llm_route", "api_llm_route", globals()["api_llm_route"], ("POST",))
+    if "api_llm_guess" in globals():
+        _maybe_add_url_rule("/api/risk/llm_guess", "api_llm_guess", globals()["api_llm_guess"], ("GET",))
     if "api_stream" in globals():
         _maybe_add_url_rule("/api/risk/stream", "api_stream", globals()["api_stream"], ("GET",))
 
