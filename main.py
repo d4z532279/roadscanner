@@ -1,4 +1,4 @@
-from __future__ import annotations 
+from __future__ import annotations
 import logging
 import httpx
 import sqlite3
@@ -51,25 +51,8 @@ from argon2.low_level import hash_secret_raw, Type as ArgonType
 from numpy.random import Generator, PCG64DXSM
 import itertools
 import colorsys
-import os
-import json
-import time
-import bleach
-import logging
-import asyncio
-import numpy as np
-from typing import Optional, Mapping, Any, Tuple
-
-import pennylane 
-import random
-import asyncio
-from typing import Optional
-from pennylane import numpy as pnp
-
-from flask import request, session, redirect, url_for, render_template_string, jsonify
-from flask_wtf.csrf import generate_csrf, validate_csrf
+from flask_wtf.csrf import validate_csrf
 from wtforms.validators import ValidationError
-import sqlite3
 from dataclasses import dataclass
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
@@ -112,9 +95,6 @@ try:
     import numpy as np
 except Exception:
     np = None
-
-
-import geonamescache
     
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
@@ -892,8 +872,7 @@ class ColorSync:
     def sample(self, uid: str | None = None) -> dict:
         
         if uid is not None:
-            
-            seed = _stable_seed(uid + base64.b16encode(self._epoch[:4]).decode())
+            seed = _stable_seed(uid)
             rng = random.Random(seed)
 
             base = rng.choice([0x49C2FF, 0x22D3A6, 0x7AD7F0,
@@ -10120,6 +10099,9 @@ def _x_store_tweets(rows: list[dict]):
     try:
         con.execute("BEGIN")
         for r in rows:
+            tid = str(r.get("tid", "")).strip()
+            if not tid:
+                continue
             con.execute(
                 f"""INSERT INTO {X_DB_TABLE_TWEETS}(tid,author,created_at,text,src,inserted_at)
                     VALUES(?,?,?,?,?,?)
@@ -10129,7 +10111,7 @@ def _x_store_tweets(rows: list[dict]):
                         text=excluded.text,
                         src=excluded.src""",
                 (
-                    str(r.get("tid", ""))[:64],
+                    tid[:64],
                     str(r.get("author", ""))[:128],
                     str(r.get("created_at", ""))[:64],
                     str(r.get("text", ""))[:8000],
@@ -10236,8 +10218,15 @@ class AutonomousXRunner:
         # thread exits naturally
 
     def _in_window(self, local_dt: _dt.datetime) -> bool:
-        st = _parse_hhmm(self.window_start) or (0, 0)
-        en = _parse_hhmm(self.window_end) or (23, 59)
+        st = _parse_hhmm(self.window_start)
+        en = _parse_hhmm(self.window_end)
+        if st is None or en is None:
+            logger.warning(
+                "Invalid autonomous window config (start=%r end=%r); defaulting to always-on.",
+                self.window_start,
+                self.window_end,
+            )
+            return True
         cur = local_dt.hour * 60 + local_dt.minute
         a = st[0] * 60 + st[1]
         b = en[0] * 60 + en[1]
@@ -10249,7 +10238,13 @@ class AutonomousXRunner:
         return cur >= a or cur < b
 
     def _sleep_until_window(self, local_dt: _dt.datetime):
-        st = _parse_hhmm(self.window_start) or (0, 0)
+        st = _parse_hhmm(self.window_start)
+        if st is None:
+            logger.warning(
+                "Invalid autonomous start time %r; skipping window sleep.",
+                self.window_start,
+            )
+            return
         a = st[0] * 60 + st[1]
         cur = local_dt.hour * 60 + local_dt.minute
         if self._in_window(local_dt):
