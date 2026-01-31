@@ -383,8 +383,6 @@ def validate_password_strength(password):
         return False
     if not re.search(r"[0-9]", password):
         return False
-    if not re.search(r"[@$!%*?&]", password):
-        return False
     return True
 
 def generate_very_strong_secret_key():
@@ -6908,8 +6906,7 @@ def register_user(username, password, invite_code=None):
 
     if not validate_password_strength(password):
         logger.warning(f"User '{username}' provided a weak password.")
-
-        return False, "Bad password, please use a stronger one."
+        return False, "Password must be 8+ characters with uppercase, lowercase, and a number."
 
     with sqlite3.connect(DB_FILE) as _db:
         _cur = _db.cursor()
@@ -7054,6 +7051,24 @@ def generate_secure_invite_code(length=16, hmac_length=16):
     hmac_digest = hmac.new(SECRET_KEY, invite_code.encode(),
                            hashlib.sha256).hexdigest()[:hmac_length]
     return f"{invite_code}-{hmac_digest}"
+
+INVITE_LOTTERY_LORE = [
+    "Signal faint, but the gatekeepers noticed you. Try again and the lattice may align.",
+    "Quantum whisper detected. Persistence shapes probability—roll once more.",
+    "The vault echoes back. Keep pulling the thread; invite paths open for the steady.",
+    "Arc drift logged. Return soon and the invitation field may stabilize.",
+    "Your beacon is warm. Keep trying—each roll refines your resonance.",
+]
+INVITE_LOTTERY_SUCCESS = [
+    "Signal locked. You caught a rare invite shard—store it safely.",
+    "Alignment achieved. The vault grants an invite window.",
+    "Quantum gate opened. This code is yours—keep it encrypted.",
+]
+INVITE_LOTTERY_COOLDOWN = [
+    "Cooling the coils. Let the lattice breathe, then draw again.",
+    "Field reset in progress. Hold steady and re-roll soon.",
+    "Signal buffer charged. Try again in a moment.",
+]
 
 def validate_invite_code_format(invite_code_with_hmac,
                                 expected_length=33,
@@ -7601,6 +7616,7 @@ def home():
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
+    csrf_token = generate_csrf()
 
     # Admin-configurable flags (mirrored to env by /settings; DB is source of truth)
     try:
@@ -7627,6 +7643,7 @@ def home():
   <meta name="keywords" content="QRoadScan, live traffic risk, road hazard alerts, driving safety, AI traffic insights, risk meter, traffic risk map, smart driving, predictive road safety, real-time hazard detection, safe route planning, road conditions, commute safety, accident risk, driver awareness" />
   <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
   <meta name="theme-color" content="{{ seed_hex }}" />
+  <meta name="csrf-token" content="{{ csrf_token }}" />
   <link rel="canonical" href="{{ request.url }}" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="QRoadScan.com" />
@@ -7795,6 +7812,71 @@ def home():
     .blog-card a{ color:var(--ink); text-decoration:none; font-weight:900; }
     .blog-card a:hover{ text-decoration:underline; }
     .kicker{ letter-spacing:.14em; text-transform:uppercase; font-weight:900; font-size:.78rem; color: color-mix(in oklab, var(--accent) 80%, #cfeaff); }
+    .lottery-card{
+      margin-top:1.2rem;
+      padding:1.2rem;
+      border-radius:18px;
+      border:1px solid var(--stroke);
+      background: linear-gradient(135deg, #0f1b2e, #0a1222);
+      box-shadow: 0 16px 40px rgba(0,0,0,.45);
+      position:relative;
+      overflow:hidden;
+    }
+    .lottery-card::after{
+      content:""; position:absolute; inset:-40%;
+      background: radial-gradient(120px 120px at 20% 20%, color-mix(in oklab, var(--accent) 40%, transparent), transparent 60%),
+                  radial-gradient(180px 180px at 80% 0%, color-mix(in oklab, var(--accent) 25%, transparent), transparent 65%);
+      opacity:.5; filter: blur(30px); pointer-events:none;
+      animation: hueFlow 18s ease-in-out infinite alternate;
+    }
+    .btn-quantum{
+      position:relative;
+      overflow:hidden;
+      border:0;
+      padding:.8rem 1.1rem;
+      font-weight:900;
+      letter-spacing:.06em;
+      text-transform:uppercase;
+      color:#04131f;
+      background: linear-gradient(120deg, #7ff0ff, color-mix(in oklab, var(--accent) 70%, #8ef2c0), #ffd1ff);
+      box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 35%, transparent);
+      border-radius:14px;
+    }
+    .btn-quantum::before{
+      content:""; position:absolute; inset:-200% 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.5) 45%, transparent 70%);
+      transform: translateX(-60%);
+      animation: shimmer 2.8s ease-in-out infinite;
+      opacity:.75;
+    }
+    .btn-quantum:disabled{ opacity:.6; cursor:not-allowed; }
+    .lottery-result{
+      margin-top:.75rem;
+      padding:.6rem .8rem;
+      border-radius:12px;
+      background:#0a1624;
+      border:1px dashed var(--stroke);
+      color:var(--sub);
+      position:relative;
+      z-index:1;
+    }
+    .lottery-code{
+      display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+      margin-top:.75rem; padding:.6rem .8rem;
+      border-radius:12px;
+      background:#071521;
+      border:1px solid color-mix(in oklab, var(--accent) 50%, transparent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color:#d8f5ff;
+      position:relative;
+      z-index:1;
+    }
+    .lottery-code button{
+      border:0; padding:.35rem .65rem; border-radius:10px;
+      background: color-mix(in oklab, var(--accent) 55%, #77ffb3);
+      color:#04131f; font-weight:800;
+    }
+    @keyframes shimmer{ 0%{transform:translateX(-60%)} 100%{transform:translateX(60%)} }
   </style>
 </head>
 <body>
@@ -7835,6 +7917,18 @@ def home():
             <span class="pill">Accent tone: {{ seed_code }}</span>
             <span class="pill">Live risk preview</span>
             <span class="pill">Perceptual color ramp</span>
+          </div>
+          <div class="lottery-card">
+            <div class="kicker">Invite Code Lottery</div>
+            <h3 class="h5 mb-1">Signal Draw</h3>
+            <p class="meta mb-2">Closed beta invites surface through persistence. Keep rolling to earn access.</p>
+            <button class="btn-quantum" id="lotteryBtn">Draw Invite Signal</button>
+            <div class="lottery-result" id="lotteryResult">The lattice is idle. Pull the signal to begin.</div>
+            <div class="lottery-code" id="lotteryCode" style="display:none">
+              <span>Invite Code</span>
+              <code id="lotteryCodeValue"></code>
+              <button type="button" id="lotteryCopy">Copy</button>
+            </div>
           </div>
           <div class="mt-4">
             <ul class="list-clean">
@@ -8326,6 +8420,49 @@ const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   }
   btnAuto.onclick = ()=>{ if(autoTimer){ stopAuto(); } else { startAuto(); } };
 
+  (function initLottery(){
+    const btn = document.getElementById('lotteryBtn');
+    if(!btn) return;
+    const result = document.getElementById('lotteryResult');
+    const codeWrap = document.getElementById('lotteryCode');
+    const codeValue = document.getElementById('lotteryCodeValue');
+    const copyBtn = document.getElementById('lotteryCopy');
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    if(copyBtn){
+      copyBtn.addEventListener('click', ()=>{
+        const text = codeValue?.textContent || "";
+        if(text){ navigator.clipboard?.writeText(text); }
+        copyBtn.textContent = "Copied";
+        setTimeout(()=>{ copyBtn.textContent = "Copy"; }, 1400);
+      });
+    }
+    btn.addEventListener('click', async ()=>{
+      btn.disabled = true;
+      btn.textContent = "Scanning...";
+      try{
+        const res = await fetch('/api/invite_lottery', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json', 'X-CSRFToken': token || "" },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if(result) result.textContent = data.message || "Signal returned no response.";
+        if(data.invite_code){
+          codeWrap.style.display = 'flex';
+          codeValue.textContent = data.invite_code;
+        } else {
+          codeWrap.style.display = 'none';
+          codeValue.textContent = "";
+        }
+      }catch(e){
+        if(result) result.textContent = "Signal lost. Try again soon.";
+      }finally{
+        btn.disabled = false;
+        btn.textContent = "Draw Invite Signal";
+      }
+    });
+  })();
+
   (function trySSE(){
     if(!('EventSource' in window)) return;
     try{
@@ -8339,7 +8476,7 @@ const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   </script>
 </body>
 </html>
-    """, seed_hex=seed_hex, seed_code=seed_code, posts=posts, dual_readings_ui=dual_readings_ui, use_grok_ui=use_grok_ui, use_chatgpt_ui=use_chatgpt_ui)
+    """, seed_hex=seed_hex, seed_code=seed_code, posts=posts, dual_readings_ui=dual_readings_ui, use_grok_ui=use_grok_ui, use_chatgpt_ui=use_chatgpt_ui, csrf_token=csrf_token)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -8352,7 +8489,7 @@ def login():
             session['username'] = username
             return redirect(url_for('dashboard'))
         else:
-            error_message = "Invalid username or password. Please try again."
+            error_message = "Signal mismatch. Your credentials did not align with the vault."
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -8381,7 +8518,52 @@ def login():
 
         .container { max-width: 400px; margin-top: 100px; }
         .Spotd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
+        .error-banner{
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 16px 0;
+            background: linear-gradient(135deg, rgba(255,71,87,0.15), rgba(255,100,196,0.12));
+            border: 1px solid rgba(255,96,126,0.6);
+            box-shadow: 0 12px 26px rgba(255, 70, 90, 0.2), inset 0 0 20px rgba(255,255,255,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+        .error-banner::after{
+            content:"";
+            position:absolute;
+            inset:-80% 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 3s ease-in-out infinite;
+            opacity: .3;
+        }
+        .error-core{
+            display:flex;
+            gap:12px;
+            align-items:flex-start;
+            position:relative;
+            z-index:1;
+        }
+        .error-icon{
+            font-size:1.4rem;
+            width:38px;
+            height:38px;
+            display:grid;
+            place-items:center;
+            border-radius:50%;
+            background: rgba(255, 75, 94, 0.25);
+            border: 1px solid rgba(255, 90, 120, 0.7);
+        }
+        .error-title{
+            font-weight:800;
+            letter-spacing:0.03em;
+            text-transform:uppercase;
+            font-size:.85rem;
+            color:#ffcad9;
+        }
+        .error-text{
+            color:#ffeef3;
+            font-size:.95rem;
+        }
         .brand { 
             font-family: 'Orbitron', sans-serif;
             font-size: 2.5rem; 
@@ -8392,7 +8574,7 @@ def login():
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        input, label, .btn, .error-message, a { color: #ffffff; }
+        input, label, .btn, .error-text, a { color: #ffffff; }
         input::placeholder { color: #cccccc; opacity: 0.7; }
         .btn-primary { 
             background-color: #00cc00; 
@@ -8409,6 +8591,10 @@ def login():
         @media (max-width: 768px) {
             .container { margin-top: 50px; }
             .brand { font-size: 2rem; }
+        }
+        @keyframes shimmer {
+            0% { transform: translateX(-60%); }
+            100% { transform: translateX(60%); }
         }
     </style>
 </head>
@@ -8434,7 +8620,16 @@ def login():
             <div class="brand">QRS</div>
             <h3 class="text-center">Login</h3>
             {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
+            <div class="error-banner" role="alert">
+                <div class="error-core">
+                    <div class="error-icon">⚠</div>
+                    <div>
+                        <div class="error-title">Access Interrupted</div>
+                        <div class="error-text">{{ error_message }}</div>
+                        <div class="error-text" style="opacity:.8;">Tip: double-check capitalization and try again.</div>
+                    </div>
+                </div>
+            </div>
             {% endif %}
             <form method="POST" novalidate>
                 {{ form.hidden_tag() }}
@@ -8497,6 +8692,7 @@ def register():
     <meta charset="UTF-8">
     <title>Register - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
 
     <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
           integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
@@ -8520,7 +8716,52 @@ def register():
         .navbar .nav-link:hover { color: #66ff66; }
         .container { max-width: 400px; margin-top: 100px; }
         .walkd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
+        .error-banner{
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 16px 0;
+            background: linear-gradient(135deg, rgba(255,71,87,0.15), rgba(255,100,196,0.12));
+            border: 1px solid rgba(255,96,126,0.6);
+            box-shadow: 0 12px 26px rgba(255, 70, 90, 0.2), inset 0 0 20px rgba(255,255,255,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+        .error-banner::after{
+            content:"";
+            position:absolute;
+            inset:-80% 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 3s ease-in-out infinite;
+            opacity: .3;
+        }
+        .error-core{
+            display:flex;
+            gap:12px;
+            align-items:flex-start;
+            position:relative;
+            z-index:1;
+        }
+        .error-icon{
+            font-size:1.4rem;
+            width:38px;
+            height:38px;
+            display:grid;
+            place-items:center;
+            border-radius:50%;
+            background: rgba(255, 75, 94, 0.25);
+            border: 1px solid rgba(255, 90, 120, 0.7);
+        }
+        .error-title{
+            font-weight:800;
+            letter-spacing:0.03em;
+            text-transform:uppercase;
+            font-size:.85rem;
+            color:#ffcad9;
+        }
+        .error-text{
+            color:#ffeef3;
+            font-size:.95rem;
+        }
         .brand {
             font-family: 'Orbitron', sans-serif;
             font-size: 2.5rem;
@@ -8531,7 +8772,14 @@ def register():
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        input, label, .btn, .error-message, a { color: #ffffff; }
+        .kicker {
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            font-weight: 800;
+            font-size: .78rem;
+            color: #9fd4ff;
+        }
+        input, label, .btn, .error-text, a { color: #ffffff; }
         input::placeholder { color: #cccccc; opacity: 0.7; }
         .btn-primary {
             background-color: #00cc00;
@@ -8543,11 +8791,79 @@ def register():
             background-color: #33ff33;
             border-color: #33ff33;
         }
+        .lottery-card{
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, rgba(7,21,33,0.9), rgba(15,26,44,0.85));
+            box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+            position: relative;
+            overflow: hidden;
+        }
+        .lottery-card::after{
+            content:"";
+            position:absolute;
+            inset:-60% 0;
+            background: radial-gradient(140px 140px at 20% 20%, rgba(110,241,255,0.4), transparent 60%);
+            opacity:.4; filter: blur(26px);
+            pointer-events:none;
+        }
+        .btn-quantum{
+            position:relative;
+            overflow:hidden;
+            border:0;
+            padding:.75rem 1.05rem;
+            font-weight:900;
+            letter-spacing:.06em;
+            text-transform:uppercase;
+            color:#04131f;
+            background: linear-gradient(120deg, #7ff0ff, #8ef2c0, #ffd1ff);
+            box-shadow: 0 10px 24px rgba(92, 240, 255, 0.25);
+            border-radius:12px;
+        }
+        .btn-quantum::before{
+            content:""; position:absolute; inset:-200% 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            transform: translateX(-60%);
+            animation: shimmer 2.8s ease-in-out infinite;
+        }
+        .btn-quantum:disabled{ opacity:.6; cursor:not-allowed; }
+        .lottery-result{
+            margin-top:.7rem;
+            padding:.6rem .8rem;
+            border-radius:10px;
+            background:#0a1624;
+            border:1px dashed rgba(255,255,255,0.2);
+            color:#b8cfe4;
+            position:relative;
+            z-index:1;
+        }
+        .lottery-code{
+            display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+            margin-top:.7rem; padding:.6rem .8rem;
+            border-radius:10px;
+            background:#071521;
+            border:1px solid rgba(120,255,220,0.3);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color:#d8f5ff;
+            position:relative;
+            z-index:1;
+        }
+        .lottery-code button{
+            border:0; padding:.35rem .65rem; border-radius:10px;
+            background:#7ff0ff;
+            color:#04131f; font-weight:800;
+        }
         a { text-decoration: none; }
         a:hover { text-decoration: underline; color: #66ff66; }
         @media (max-width: 768px) {
             .container { margin-top: 50px; }
             .brand { font-size: 2rem; }
+        }
+        @keyframes shimmer {
+            0% { transform: translateX(-60%); }
+            100% { transform: translateX(60%); }
         }
     </style>
 </head>
@@ -8573,7 +8889,16 @@ def register():
             <div class="brand">QRS</div>
             <h3 class="text-center">Register</h3>
             {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
+            <div class="error-banner" role="alert">
+                <div class="error-core">
+                    <div class="error-icon">⚠</div>
+                    <div>
+                        <div class="error-title">Signal Disrupted</div>
+                        <div class="error-text">{{ error_message }}</div>
+                        <div class="error-text" style="opacity:.8;">Keep trying — the vault rewards persistence.</div>
+                    </div>
+                </div>
+            </div>
             {% endif %}
             <form method="POST" novalidate>
                 {{ form.hidden_tag() }}
@@ -8584,7 +8909,7 @@ def register():
                 <div class="form-group">
                     {{ form.password.label }}
                     {{ form.password(class="form-control", placeholder="Choose a password") }}
-                    <small id="passwordStrength" class="form-text"></small>
+                    <small id="passwordStrength" class="form-text">8+ characters with uppercase, lowercase, and a number. Special characters optional.</small>
                 </div>
                 {% if not registration_enabled %}
                 <div class="form-group">
@@ -8594,6 +8919,18 @@ def register():
                 {% endif %}
                 {{ form.submit(class="btn btn-primary btn-block") }}
             </form>
+            <div class="lottery-card">
+                <div class="kicker">Invite Code Lottery</div>
+                <strong>Closed beta access draw</strong>
+                <p class="mt-2 mb-2" style="color:#b8cfe4;">Each draw is a signal pulse. Keep trying to unlock your invite shard.</p>
+                <button class="btn-quantum" id="lotteryBtn">Draw Invite Signal</button>
+                <div class="lottery-result" id="lotteryResult">The lattice awaits your first pull.</div>
+                <div class="lottery-code" id="lotteryCode" style="display:none">
+                    <span>Invite Code</span>
+                    <code id="lotteryCodeValue"></code>
+                    <button type="button" id="lotteryCopy">Copy</button>
+                </div>
+            </div>
             <p class="mt-3 text-center">Already have an account? <a href="{{ url_for('login') }}">Login here</a></p>
         </div>
     </div>
@@ -8608,11 +8945,103 @@ def register():
                 toggler.setAttribute('aria-expanded', isShown ? 'true' : 'false');
             });
         }
+
+        const btn = document.getElementById('lotteryBtn');
+        const result = document.getElementById('lotteryResult');
+        const codeWrap = document.getElementById('lotteryCode');
+        const codeValue = document.getElementById('lotteryCodeValue');
+        const copyBtn = document.getElementById('lotteryCopy');
+        const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function () {
+                const text = codeValue?.textContent || "";
+                if (text) { navigator.clipboard?.writeText(text); }
+                copyBtn.textContent = "Copied";
+                setTimeout(() => { copyBtn.textContent = "Copy"; }, 1400);
+            });
+        }
+        if (btn) {
+            btn.addEventListener('click', async function () {
+                btn.disabled = true;
+                btn.textContent = "Scanning...";
+                try {
+                    const res = await fetch('/api/invite_lottery', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': token || "" },
+                        body: JSON.stringify({})
+                    });
+                    const data = await res.json();
+                    if (result) result.textContent = data.message || "Signal returned no response.";
+                    if (data.invite_code) {
+                        codeWrap.style.display = 'flex';
+                        codeValue.textContent = data.invite_code;
+                    } else {
+                        codeWrap.style.display = 'none';
+                        codeValue.textContent = "";
+                    }
+                } catch (e) {
+                    if (result) result.textContent = "Signal lost. Try again soon.";
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Draw Invite Signal";
+                }
+            });
+        }
     });
     </script>
 </body>
 </html>
     """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+
+@app.post('/api/invite_lottery')
+def invite_lottery():
+    token = _csrf_from_request()
+    if not token:
+        return jsonify(ok=False, error="csrf_missing"), 400
+    try:
+        validate_csrf(token)
+    except ValidationError:
+        return jsonify(ok=False, error="csrf_invalid"), 400
+
+    now = time.time()
+    cooldown_seconds = 20
+    last = float(session.get("invite_lottery_last", 0.0))
+    if now - last < cooldown_seconds:
+        wait = max(1, int(cooldown_seconds - (now - last)))
+        message = f"{secrets.choice(INVITE_LOTTERY_COOLDOWN)} ({wait}s)"
+        return jsonify(ok=False, status="cooldown", message=message, wait_seconds=wait), 429
+
+    session["invite_lottery_last"] = now
+    draws = int(session.get("invite_lottery_draws", 0)) + 1
+    session["invite_lottery_draws"] = draws
+
+    if is_registration_enabled():
+        message = "Registration is currently open—no invite needed. The gate is already unlocked."
+        return jsonify(ok=True, status="open", message=message, draws=draws)
+
+    roll = secrets.randbelow(1000)
+    win = roll < 12
+    rarity = "ascendant" if roll < 3 else "rare" if roll < 12 else "trace"
+    if win:
+        invite_code = generate_secure_invite_code()
+        try:
+            with sqlite3.connect(DB_FILE) as db:
+                db.execute("INSERT INTO invite_codes (code) VALUES (?)", (invite_code,))
+                db.commit()
+        except Exception:
+            logger.exception("Invite lottery failed to persist code.")
+            return jsonify(ok=False, status="error", message="The lattice flickered. Try again soon."), 500
+        return jsonify(
+            ok=True,
+            status="win",
+            message=secrets.choice(INVITE_LOTTERY_SUCCESS),
+            invite_code=invite_code,
+            rarity=rarity,
+            draws=draws,
+        )
+
+    message = secrets.choice(INVITE_LOTTERY_LORE)
+    return jsonify(ok=True, status="miss", message=message, rarity=rarity, draws=draws)
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
