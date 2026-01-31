@@ -97,6 +97,7 @@ except Exception:
     oqs = cast(Any, None)
 
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.routing import BuildError
 try:
     import fcntl  
 except Exception:
@@ -4120,6 +4121,12 @@ def _admin_csrf_guard():
     except ValidationError:
         return jsonify(ok=False, error="csrf_invalid"), 400
     return None
+
+def _safe_url_for(endpoint: str) -> Optional[str]:
+    try:
+        return url_for(endpoint)
+    except BuildError:
+        return None
 
 @app.post("/admin/blog/api/get")
 def admin_blog_api_get():
@@ -9305,8 +9312,8 @@ def dashboard():
 
     x_dashboard_url = url_for("x_dashboard") if "x_dashboard" in app.view_functions else None
     admin_blog_backup_url = url_for("admin_blog_backup_page") if "admin_blog_backup_page" in app.view_functions else None
-    admin_local_llm_url = url_for("admin_local_llm_page") if "admin_local_llm_page" in app.view_functions else None
-    local_llm_url = url_for("local_llm") if "local_llm" in app.view_functions else None
+    admin_local_llm_url = _safe_url_for("admin_local_llm_page") if "admin_local_llm_page" in app.view_functions else None
+    local_llm_url = _safe_url_for("local_llm") if "local_llm" in app.view_functions else None
 
     return render_template_string("""
 <!DOCTYPE html>
