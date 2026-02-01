@@ -1,11 +1,11 @@
-from __future__ import annotations 
+from __future__ import annotations
 import logging
 import httpx
 import sqlite3
 import psutil
 from flask import (
     Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, make_response, Response, stream_with_context)
+    session, jsonify, flash, make_response, Response, stream_with_context, abort)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
@@ -17,7 +17,8 @@ from cryptography.hazmat.backends import default_backend
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type
-from datetime import timedelta, datetime
+import datetime as _dt
+from datetime import timedelta, datetime, timezone
 from markdown2 import markdown
 import bleach
 import geonamescache
@@ -51,25 +52,8 @@ from argon2.low_level import hash_secret_raw, Type as ArgonType
 from numpy.random import Generator, PCG64DXSM
 import itertools
 import colorsys
-import os
-import json
-import time
-import bleach
-import logging
-import asyncio
-import numpy as np
-from typing import Optional, Mapping, Any, Tuple
-
-import pennylane 
-import random
-import asyncio
-from typing import Optional
-from pennylane import numpy as pnp
-
-from flask import request, session, redirect, url_for, render_template_string, jsonify
-from flask_wtf.csrf import generate_csrf, validate_csrf
+from flask_wtf.csrf import validate_csrf
 from wtforms.validators import ValidationError
-import sqlite3
 from dataclasses import dataclass
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
@@ -97,6 +81,7 @@ except Exception:
     oqs = cast(Any, None)
 
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.routing import BuildError
 try:
     import fcntl  
 except Exception:
@@ -107,14 +92,7 @@ class SealedCache(TypedDict, total=False):
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
-try:
-    import numpy as np
-except Exception:
-    np = None
 
-
-import geonamescache
-    
 geonames = geonamescache.GeonamesCache()
 CITIES = geonames.get_cities()                    
 US_STATES_DICT = geonames.get_us_states()         
@@ -406,8 +384,6 @@ def validate_password_strength(password):
         return False
     if not re.search(r"[0-9]", password):
         return False
-    if not re.search(r"[@$!%*?&]", password):
-        return False
     return True
 
 def generate_very_strong_secret_key():
@@ -648,6 +624,17 @@ app.config.update(SESSION_COOKIE_SECURE=True,
                   SECRET_KEY=SECRET_KEY)
 
 csrf = CSRFProtect(app)
+
+@app.before_request
+def allow_local_insecure_cookies():
+    try:
+        host = (request.host or "").split(":")[0]
+        if host in {"localhost", "127.0.0.1"} or request.remote_addr in {"127.0.0.1", "::1"}:
+            app.config["SESSION_COOKIE_SECURE"] = False
+        else:
+            app.config["SESSION_COOKIE_SECURE"] = True
+    except Exception:
+        app.config["SESSION_COOKIE_SECURE"] = True
 
 @app.after_request
 def apply_csp(response):
@@ -891,8 +878,7 @@ class ColorSync:
     def sample(self, uid: str | None = None) -> dict:
         
         if uid is not None:
-            
-            seed = _stable_seed(uid + base64.b16encode(self._epoch[:4]).decode())
+            seed = _stable_seed(uid)
             rng = random.Random(seed)
 
             base = rng.choice([0x49C2FF, 0x22D3A6, 0x7AD7F0,
@@ -995,6 +981,45 @@ class ColorSync:
                 h = (r - g) / d + 4
             h /= 6
         return int(h * 360), int(s * 100), int(l * 100)
+
+_WEATHER_COLOR = ColorSync()
+
+_WEATHER_CODE_LABELS = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Freezing drizzle (light)",
+    57: "Freezing drizzle (dense)",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Freezing rain (light)",
+    67: "Freezing rain (heavy)",
+    71: "Slight snow",
+    73: "Moderate snow",
+    75: "Heavy snow",
+    77: "Snow grains",
+    80: "Rain showers (slight)",
+    81: "Rain showers (moderate)",
+    82: "Rain showers (violent)",
+    85: "Snow showers (slight)",
+    86: "Snow showers (heavy)",
+    95: "Thunderstorm",
+    96: "Thunderstorm (slight hail)",
+    99: "Thunderstorm (heavy hail)",
+}
+
+def _weather_code_label(code: int | str | None) -> str:
+    try:
+        return _WEATHER_CODE_LABELS.get(int(code), "Unknown")
+    except Exception:
+        return "Unknown"
 
 
 colorsync = ColorSync()
@@ -2340,6 +2365,7 @@ X2_CAROUSEL_MAX_DWELL = float(os.environ.get("RGN_X2_CAROUSEL_MAX_DWELL", "22.0"
 CAROUSEL_MIN_DWELL = X2_CAROUSEL_MIN_DWELL
 CAROUSEL_MAX_DWELL = X2_CAROUSEL_MAX_DWELL
 
+X2_DEFAULT_MODEL = os.environ.get("RGN_X2_DEFAULT_MODEL", "gpt-5.2-thinking")
 X2_MAX_ITEMS = int(os.environ.get("RGN_X2_CAROUSEL_MAX_ITEMS", "80"))
 X2_MAX_STORE = int(os.environ.get("RGN_X2_MAX_STORE", "2500"))
 
@@ -2534,6 +2560,65 @@ def x2_fetch_user_tweets(bearer: str, x_user_id: str, max_results: int = 80, pag
             time.sleep((2 ** attempt) * HTTP_BACKOFF)
     raise RuntimeError(str(last_err) if last_err else "X fetch failed")
 
+def _x2_fetch_test_payload(seed: Optional[int] = None, max_results: int = 20) -> Dict[str, Any]:
+    rng = random.Random(seed or 42)
+    authors = ["roadscan_ai", "trafficwire", "stormline", "cautious_commute", "nightdrive_lab"]
+    phrases = [
+        "Bridge icing reported near the east span.",
+        "Visibility dropping on I-5; keep following distance.",
+        "Emergency responders clearing debris; expect delays.",
+        "Wet leaves causing traction loss at downhill turns.",
+        "Construction merge zone shifted overnight.",
+        "Fog pockets likely after midnight—use low beams.",
+        "Hydroplaning risk rising with heavy rain bands.",
+    ]
+    items = []
+    count = max(5, min(80, int(max_results)))
+    base = datetime.utcnow().replace(tzinfo=timezone.utc)
+    for i in range(count):
+        ts = base - timedelta(minutes=7 * i)
+        author = rng.choice(authors)
+        text = rng.choice(phrases)
+        items.append(
+            {
+                "id": f"test_{seed or 42}_{i}",
+                "text": f"{text} [synthetic #{i+1}]",
+                "created_at": ts.isoformat().replace("+00:00", "Z"),
+                "author_id": author,
+            }
+        )
+    return {
+        "data": items,
+        "meta": {
+            "result_count": len(items),
+            "newest_id": items[0]["id"] if items else None,
+            "oldest_id": items[-1]["id"] if items else None,
+        },
+    }
+
+def _x2_fetch_payload_from_env(bearer: str, x_user_id: str, max_results: int = 80) -> Dict[str, Any]:
+    test_api = (os.getenv("RGN_X_TEST_API") or "").strip()
+    if not test_api:
+        return x2_fetch_user_tweets(bearer=bearer, x_user_id=x_user_id, max_results=max_results)
+    if test_api.lower() in {"1", "true", "synthetic", "local"}:
+        seed = None
+        try:
+            seed = int(os.getenv("RGN_X_TEST_SEED", "42"))
+        except Exception:
+            seed = 42
+        return _x2_fetch_test_payload(seed=seed, max_results=max_results)
+    if test_api.startswith("http://") or test_api.startswith("https://"):
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.get(test_api)
+                resp.raise_for_status()
+                payload = resp.json()
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            logger.exception("RGN_X_TEST_API fetch failed; falling back to live X fetch.")
+    return x2_fetch_user_tweets(bearer=bearer, x_user_id=x_user_id, max_results=max_results)
+
 
 def x2_search_recent(bearer: str, query: str, max_results: int = 50, next_token: Optional[str] = None) -> Dict[str, Any]:
     """X API v2: GET /2/tweets/search/recent"""
@@ -2613,17 +2698,17 @@ def x2_upsert_tweets(owner_user_id: int, rows: List[Dict[str, str]]) -> int:
         conn.execute("BEGIN")
         for r in rows:
             conn.execute(
-                "INSERT INTO x2_tweets(owner_user_id,tid,author,created_at,text,src,inserted_at) "
+                "INSERT INTO x2_tweets(user_id,tid,author,created_at,text,src,inserted_at) "
                 "VALUES(?,?,?,?,?,?,?) "
-                "ON CONFLICT(owner_user_id,tid) DO UPDATE SET author=excluded.author, created_at=excluded.created_at, "
+                "ON CONFLICT(user_id,tid) DO UPDATE SET author=excluded.author, created_at=excluded.created_at, "
                 "text=excluded.text, src=excluded.src, inserted_at=excluded.inserted_at",
                 (uid, r.get("tid", ""), r.get("author", ""), r.get("created_at", ""), r.get("text", ""), r.get("src", ""), _utc_iso()),
             )
         conn.commit()
         conn.execute(
-            "DELETE FROM x2_tweets WHERE owner_user_id=? AND tid NOT IN ("
-            "SELECT tid FROM x2_tweets WHERE owner_user_id=? ORDER BY inserted_at DESC LIMIT ?)",
-            (uid, uid, MAX_TWEETS_STORE),
+            "DELETE FROM x2_tweets WHERE user_id=? AND tid NOT IN ("
+            "SELECT tid FROM x2_tweets WHERE user_id=? ORDER BY inserted_at DESC LIMIT ?)",
+            (uid, uid, X2_MAX_STORE),
         )
         conn.commit()
     return len(rows)
@@ -2633,7 +2718,7 @@ def x2_list_tweets(owner_user_id: int, limit: int = 800) -> List[sqlite3.Row]:
     uid = int(owner_user_id)
     with _x2_db() as conn:
         rows = conn.execute(
-            "SELECT tid,author,created_at,text,src,inserted_at FROM x2_tweets WHERE owner_user_id=? "
+            "SELECT tid,author,created_at,text,src,inserted_at FROM x2_tweets WHERE user_id=? "
             "ORDER BY inserted_at DESC LIMIT ?",
             (uid, int(limit)),
         ).fetchall()
@@ -2646,7 +2731,7 @@ def x2_get_label(owner_user_id: int, tid: str) -> Optional[sqlite3.Row]:
     with _x2_db() as conn:
         return conn.execute(
             "SELECT tid,neg,sar,tone,edu,truth,cool,click,incl,ext,summary,tags_json,title,raw_json,model,created_at "
-            "FROM x2_labels WHERE owner_user_id=? AND tid=?",
+            "FROM x2_labels WHERE user_id=? AND tid=?",
             (uid, tid),
         ).fetchone()
 
@@ -2656,8 +2741,8 @@ def x2_unlabeled_ids(owner_user_id: int, limit: int = 24) -> List[str]:
     with _x2_db() as conn:
         rows = conn.execute(
             "SELECT t.tid FROM x2_tweets t LEFT JOIN x2_labels l "
-            "ON t.owner_user_id=l.owner_user_id AND t.tid=l.tid "
-            "WHERE t.owner_user_id=? AND l.tid IS NULL "
+            "ON t.user_id=l.user_id AND t.tid=l.tid "
+            "WHERE t.user_id=? AND l.tid IS NULL "
             "ORDER BY t.inserted_at DESC LIMIT ?",
             (uid, int(limit)),
         ).fetchall()
@@ -2678,9 +2763,9 @@ def x2_upsert_label(owner_user_id: int, tid: str, obj: Dict[str, Any], model: st
     raw_json = json.dumps(obj, ensure_ascii=False)
     with _x2_db() as conn:
         conn.execute(
-            "INSERT INTO x2_labels(owner_user_id,tid,neg,sar,tone,edu,truth,cool,click,incl,ext,summary,tags_json,title,raw_json,model,created_at) "
+            "INSERT INTO x2_labels(user_id,tid,neg,sar,tone,edu,truth,cool,click,incl,ext,summary,tags_json,title,raw_json,model,created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(owner_user_id,tid) DO UPDATE SET "
+            "ON CONFLICT(user_id,tid) DO UPDATE SET "
             "neg=excluded.neg,sar=excluded.sar,tone=excluded.tone,edu=excluded.edu,truth=excluded.truth,cool=excluded.cool,"
             "click=excluded.click,incl=excluded.incl,ext=excluded.ext,summary=excluded.summary,tags_json=excluded.tags_json,"
             "title=excluded.title,raw_json=excluded.raw_json,model=excluded.model,created_at=excluded.created_at",
@@ -2970,7 +3055,7 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
     try:
         with _x2_db() as conn:
             prow = conn.execute(
-                "SELECT tags_json FROM x2_posts WHERE owner_user_id=? ORDER BY created_at DESC LIMIT 40",
+                "SELECT tags_json FROM x2_posts WHERE user_id=? ORDER BY created_at DESC LIMIT 40",
                 (uid,),
             ).fetchall()
         for r in prow or []:
@@ -2989,7 +3074,7 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
     try:
         with _x2_db() as conn:
             fb = conn.execute(
-                "SELECT meta_json,created_at FROM x2_events WHERE owner_user_id=? AND kind='skip' ORDER BY created_at DESC LIMIT 80",
+                "SELECT meta_json,created_at FROM x2_events WHERE user_id=? AND kind='skip' ORDER BY created_at DESC LIMIT 80",
                 (uid,),
             ).fetchall()
         for mj, ts in fb or []:
@@ -3016,8 +3101,8 @@ def _x2_build_carousel(owner_user_id: int, timebox_s: float = 0.0, limit: int = 
             "SELECT t.tid,t.author,t.created_at,t.text,t.src,t.inserted_at,"
             "l.neg,l.sar,l.tone,l.edu,l.truth,l.cool,l.click,l.incl,l.ext,l.summary,l.tags_json,l.title "
             "FROM x2_tweets t JOIN x2_labels l "
-            "ON t.owner_user_id=l.owner_user_id AND t.tid=l.tid "
-            "WHERE t.owner_user_id=? "
+            "ON t.user_id=l.user_id AND t.tid=l.tid "
+            "WHERE t.user_id=? "
             "ORDER BY t.inserted_at DESC LIMIT 900",
             (uid,),
         ).fetchall()
@@ -3327,6 +3412,24 @@ def sanitize_tags_csv(raw: str, max_tags: int = 50) -> str:
     parts = [p for p in parts if p]
     out = ",".join(parts[:max_tags])
     return out[:500]
+
+def _mask_secret(val: str, keep: int = 4) -> str:
+    if not val:
+        return ""
+    clean = str(val).strip()
+    if not clean:
+        return ""
+    if len(clean) <= keep:
+        return "*" * len(clean)
+    return f"{clean[:keep]}***"
+
+def _is_masked_secret(val: str) -> bool:
+    if not isinstance(val, str):
+        return False
+    clean = val.strip()
+    if not clean or clean in {"—", "***"}:
+        return True
+    return bool(re.search(r"(\*{3,}|•{3,})", clean))
     
 def _blog_ctx(field: str, rid: Optional[int] = None) -> dict:
     return build_hd_ctx(domain="blog", field=field, rid=rid)
@@ -3373,6 +3476,18 @@ def _get_userid_or_abort() -> int:
         return -1
     uid = get_user_id(session['username'])
     return int(uid or -1)
+
+def _require_user_id_or_redirect():
+    uid = _get_userid_or_abort()
+    if uid < 0:
+        return redirect(url_for("login"))
+    return uid
+
+def _require_user_id_or_abort() -> int:
+    uid = _get_userid_or_abort()
+    if uid < 0:
+        abort(401)
+    return uid
 
 def blog_get_by_slug(slug: str, allow_any_status: bool=False) -> Optional[dict]:
     if not _valid_slug(slug): return None
@@ -4120,6 +4235,22 @@ def _admin_csrf_guard():
     except ValidationError:
         return jsonify(ok=False, error="csrf_invalid"), 400
     return None
+
+def _user_csrf_guard():
+    token = _csrf_from_request()
+    if not token:
+        return jsonify(ok=False, error="csrf_missing"), 400
+    try:
+        validate_csrf(token)
+    except ValidationError:
+        return jsonify(ok=False, error="csrf_invalid"), 400
+    return None
+
+def _safe_url_for(endpoint: str) -> Optional[str]:
+    try:
+        return url_for(endpoint)
+    except BuildError:
+        return None
 
 @app.post("/admin/blog/api/get")
 def admin_blog_api_get():
@@ -6887,8 +7018,7 @@ def register_user(username, password, invite_code=None):
 
     if not validate_password_strength(password):
         logger.warning(f"User '{username}' provided a weak password.")
-
-        return False, "Bad password, please use a stronger one."
+        return False, "Password must be 8+ characters with uppercase, lowercase, and a number."
 
     with sqlite3.connect(DB_FILE) as _db:
         _cur = _db.cursor()
@@ -7033,6 +7163,24 @@ def generate_secure_invite_code(length=16, hmac_length=16):
     hmac_digest = hmac.new(SECRET_KEY, invite_code.encode(),
                            hashlib.sha256).hexdigest()[:hmac_length]
     return f"{invite_code}-{hmac_digest}"
+
+INVITE_LOTTERY_LORE = [
+    "Signal faint, but the gatekeepers noticed you. Try again and the lattice may align.",
+    "Quantum whisper detected. Persistence shapes probability—roll once more.",
+    "The vault echoes back. Keep pulling the thread; invite paths open for the steady.",
+    "Arc drift logged. Return soon and the invitation field may stabilize.",
+    "Your beacon is warm. Keep trying—each roll refines your resonance.",
+]
+INVITE_LOTTERY_SUCCESS = [
+    "Signal locked. You caught a rare invite shard—store it safely.",
+    "Alignment achieved. The vault grants an invite window.",
+    "Quantum gate opened. This code is yours—keep it encrypted.",
+]
+INVITE_LOTTERY_COOLDOWN = [
+    "Cooling the coils. Let the lattice breathe, then draw again.",
+    "Field reset in progress. Hold steady and re-roll soon.",
+    "Signal buffer charged. Try again in a moment.",
+]
 
 def validate_invite_code_format(invite_code_with_hmac,
                                 expected_length=33,
@@ -7265,6 +7413,49 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
 
     logger.warning("PHF processing failed; defaulting to Unsafe.")
     return False, "PHF processing failed."
+
+async def weather_phf_filter_input(input_text: str) -> tuple[bool, str]:
+
+    logger.debug(
+        "Entering weather_phf_filter_input with input length %d",
+        len(input_text) if isinstance(input_text, str) else 0)
+
+    if not input_text or not isinstance(input_text, str):
+        logger.warning(
+            "weather_phf_filter_input received invalid or empty input_text.")
+        return False, "Invalid input."
+
+    weather_prompt = (
+        "You are the Weather LLM Security Guide. Apply the Probabilistic Harm "
+        "Filter (PHF) to weather + route inputs before they are used in a report "
+        "or forecast explanation. Each category must be labeled Safe or Flagged.\n\n"
+        "### Categories:\n"
+        "1. Violence\n"
+        "2. Hate Speech\n"
+        "3. Self-Harm\n"
+        "4. Harassment/Bullying\n"
+        "5. Illegal Activities\n"
+        "6. Sensitive Location Disclosure\n\n"
+        "[inspectthiscontent]\n"
+        f"\"{input_text}\"\n"
+        "---[/inspectthiscontent]\n"
+        "**Assessment Format**:\n"
+        "- Label each category Safe or Flagged.\n"
+        "- Conclude with Final Recommendation: Safe or Flagged.\n"
+    )
+
+    try:
+        logger.debug("Attempting Weather PHF check.")
+        response = await run_grok_completion(weather_prompt)
+        if response and ("Safe" in response or "Flagged" in response):
+            logger.debug("Weather PHF succeeded: %s", response.strip())
+            return "Safe" in response, f"Weather PHF: {response.strip()}"
+        logger.debug("Weather PHF did not return expected keywords.")
+    except Exception as e:
+        logger.error("Weather PHF failed: %s", e, exc_info=True)
+
+    logger.warning("Weather PHF processing failed; defaulting to Unsafe.")
+    return False, "Weather PHF processing failed."
 
 async def scan_debris_for_route(
     lat: float,
@@ -7537,6 +7728,7 @@ def home():
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
+    csrf_token = generate_csrf()
 
     # Admin-configurable flags (mirrored to env by /settings; DB is source of truth)
     try:
@@ -7563,6 +7755,7 @@ def home():
   <meta name="keywords" content="QRoadScan, live traffic risk, road hazard alerts, driving safety, AI traffic insights, risk meter, traffic risk map, smart driving, predictive road safety, real-time hazard detection, safe route planning, road conditions, commute safety, accident risk, driver awareness" />
   <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
   <meta name="theme-color" content="{{ seed_hex }}" />
+  <meta name="csrf-token" content="{{ csrf_token }}" />
   <link rel="canonical" href="{{ request.url }}" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="QRoadScan.com" />
@@ -7731,6 +7924,71 @@ def home():
     .blog-card a{ color:var(--ink); text-decoration:none; font-weight:900; }
     .blog-card a:hover{ text-decoration:underline; }
     .kicker{ letter-spacing:.14em; text-transform:uppercase; font-weight:900; font-size:.78rem; color: color-mix(in oklab, var(--accent) 80%, #cfeaff); }
+    .lottery-card{
+      margin-top:1.2rem;
+      padding:1.2rem;
+      border-radius:18px;
+      border:1px solid var(--stroke);
+      background: linear-gradient(135deg, #0f1b2e, #0a1222);
+      box-shadow: 0 16px 40px rgba(0,0,0,.45);
+      position:relative;
+      overflow:hidden;
+    }
+    .lottery-card::after{
+      content:""; position:absolute; inset:-40%;
+      background: radial-gradient(120px 120px at 20% 20%, color-mix(in oklab, var(--accent) 40%, transparent), transparent 60%),
+                  radial-gradient(180px 180px at 80% 0%, color-mix(in oklab, var(--accent) 25%, transparent), transparent 65%);
+      opacity:.5; filter: blur(30px); pointer-events:none;
+      animation: hueFlow 18s ease-in-out infinite alternate;
+    }
+    .btn-quantum{
+      position:relative;
+      overflow:hidden;
+      border:0;
+      padding:.8rem 1.1rem;
+      font-weight:900;
+      letter-spacing:.06em;
+      text-transform:uppercase;
+      color:#04131f;
+      background: linear-gradient(120deg, #7ff0ff, color-mix(in oklab, var(--accent) 70%, #8ef2c0), #ffd1ff);
+      box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 35%, transparent);
+      border-radius:14px;
+    }
+    .btn-quantum::before{
+      content:""; position:absolute; inset:-200% 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.5) 45%, transparent 70%);
+      transform: translateX(-60%);
+      animation: shimmer 2.8s ease-in-out infinite;
+      opacity:.75;
+    }
+    .btn-quantum:disabled{ opacity:.6; cursor:not-allowed; }
+    .lottery-result{
+      margin-top:.75rem;
+      padding:.6rem .8rem;
+      border-radius:12px;
+      background:#0a1624;
+      border:1px dashed var(--stroke);
+      color:var(--sub);
+      position:relative;
+      z-index:1;
+    }
+    .lottery-code{
+      display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+      margin-top:.75rem; padding:.6rem .8rem;
+      border-radius:12px;
+      background:#071521;
+      border:1px solid color-mix(in oklab, var(--accent) 50%, transparent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color:#d8f5ff;
+      position:relative;
+      z-index:1;
+    }
+    .lottery-code button{
+      border:0; padding:.35rem .65rem; border-radius:10px;
+      background: color-mix(in oklab, var(--accent) 55%, #77ffb3);
+      color:#04131f; font-weight:800;
+    }
+    @keyframes shimmer{ 0%{transform:translateX(-60%)} 100%{transform:translateX(60%)} }
   </style>
 </head>
 <body>
@@ -7771,6 +8029,18 @@ def home():
             <span class="pill">Accent tone: {{ seed_code }}</span>
             <span class="pill">Live risk preview</span>
             <span class="pill">Perceptual color ramp</span>
+          </div>
+          <div class="lottery-card">
+            <div class="kicker">Invite Code Lottery</div>
+            <h3 class="h5 mb-1">Signal Draw</h3>
+            <p class="meta mb-2">Closed beta invites surface through persistence. Keep rolling to earn access.</p>
+            <button class="btn-quantum" id="lotteryBtn">Draw Invite Signal</button>
+            <div class="lottery-result" id="lotteryResult">The lattice is idle. Pull the signal to begin.</div>
+            <div class="lottery-code" id="lotteryCode" style="display:none">
+              <span>Invite Code</span>
+              <code id="lotteryCodeValue"></code>
+              <button type="button" id="lotteryCopy">Copy</button>
+            </div>
           </div>
           <div class="mt-4">
             <ul class="list-clean">
@@ -8262,6 +8532,49 @@ const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   }
   btnAuto.onclick = ()=>{ if(autoTimer){ stopAuto(); } else { startAuto(); } };
 
+  (function initLottery(){
+    const btn = document.getElementById('lotteryBtn');
+    if(!btn) return;
+    const result = document.getElementById('lotteryResult');
+    const codeWrap = document.getElementById('lotteryCode');
+    const codeValue = document.getElementById('lotteryCodeValue');
+    const copyBtn = document.getElementById('lotteryCopy');
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    if(copyBtn){
+      copyBtn.addEventListener('click', ()=>{
+        const text = codeValue?.textContent || "";
+        if(text){ navigator.clipboard?.writeText(text); }
+        copyBtn.textContent = "Copied";
+        setTimeout(()=>{ copyBtn.textContent = "Copy"; }, 1400);
+      });
+    }
+    btn.addEventListener('click', async ()=>{
+      btn.disabled = true;
+      btn.textContent = "Scanning...";
+      try{
+        const res = await fetch('/api/invite_lottery', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json', 'X-CSRFToken': token || "" },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if(result) result.textContent = data.message || "Signal returned no response.";
+        if(data.invite_code){
+          codeWrap.style.display = 'flex';
+          codeValue.textContent = data.invite_code;
+        } else {
+          codeWrap.style.display = 'none';
+          codeValue.textContent = "";
+        }
+      }catch(e){
+        if(result) result.textContent = "Signal lost. Try again soon.";
+      }finally{
+        btn.disabled = false;
+        btn.textContent = "Draw Invite Signal";
+      }
+    });
+  })();
+
   (function trySSE(){
     if(!('EventSource' in window)) return;
     try{
@@ -8275,7 +8588,7 @@ const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   </script>
 </body>
 </html>
-    """, seed_hex=seed_hex, seed_code=seed_code, posts=posts, dual_readings_ui=dual_readings_ui, use_grok_ui=use_grok_ui, use_chatgpt_ui=use_chatgpt_ui)
+    """, seed_hex=seed_hex, seed_code=seed_code, posts=posts, dual_readings_ui=dual_readings_ui, use_grok_ui=use_grok_ui, use_chatgpt_ui=use_chatgpt_ui, csrf_token=csrf_token)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -8288,7 +8601,7 @@ def login():
             session['username'] = username
             return redirect(url_for('dashboard'))
         else:
-            error_message = "Invalid username or password. Please try again."
+            error_message = "Signal mismatch. Your credentials did not align with the vault."
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -8317,7 +8630,52 @@ def login():
 
         .container { max-width: 400px; margin-top: 100px; }
         .Spotd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
+        .error-banner{
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 16px 0;
+            background: linear-gradient(135deg, rgba(255,71,87,0.15), rgba(255,100,196,0.12));
+            border: 1px solid rgba(255,96,126,0.6);
+            box-shadow: 0 12px 26px rgba(255, 70, 90, 0.2), inset 0 0 20px rgba(255,255,255,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+        .error-banner::after{
+            content:"";
+            position:absolute;
+            inset:-80% 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 3s ease-in-out infinite;
+            opacity: .3;
+        }
+        .error-core{
+            display:flex;
+            gap:12px;
+            align-items:flex-start;
+            position:relative;
+            z-index:1;
+        }
+        .error-icon{
+            font-size:1.4rem;
+            width:38px;
+            height:38px;
+            display:grid;
+            place-items:center;
+            border-radius:50%;
+            background: rgba(255, 75, 94, 0.25);
+            border: 1px solid rgba(255, 90, 120, 0.7);
+        }
+        .error-title{
+            font-weight:800;
+            letter-spacing:0.03em;
+            text-transform:uppercase;
+            font-size:.85rem;
+            color:#ffcad9;
+        }
+        .error-text{
+            color:#ffeef3;
+            font-size:.95rem;
+        }
         .brand { 
             font-family: 'Orbitron', sans-serif;
             font-size: 2.5rem; 
@@ -8328,7 +8686,7 @@ def login():
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        input, label, .btn, .error-message, a { color: #ffffff; }
+        input, label, .btn, .error-text, a { color: #ffffff; }
         input::placeholder { color: #cccccc; opacity: 0.7; }
         .btn-primary { 
             background-color: #00cc00; 
@@ -8345,6 +8703,10 @@ def login():
         @media (max-width: 768px) {
             .container { margin-top: 50px; }
             .brand { font-size: 2rem; }
+        }
+        @keyframes shimmer {
+            0% { transform: translateX(-60%); }
+            100% { transform: translateX(60%); }
         }
     </style>
 </head>
@@ -8370,7 +8732,16 @@ def login():
             <div class="brand">QRS</div>
             <h3 class="text-center">Login</h3>
             {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
+            <div class="error-banner" role="alert">
+                <div class="error-core">
+                    <div class="error-icon">⚠</div>
+                    <div>
+                        <div class="error-title">Access Interrupted</div>
+                        <div class="error-text">{{ error_message }}</div>
+                        <div class="error-text" style="opacity:.8;">Tip: double-check capitalization and try again.</div>
+                    </div>
+                </div>
+            </div>
             {% endif %}
             <form method="POST" novalidate>
                 {{ form.hidden_tag() }}
@@ -8433,6 +8804,7 @@ def register():
     <meta charset="UTF-8">
     <title>Register - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
 
     <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
           integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
@@ -8442,6 +8814,8 @@ def register():
           integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
           integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
 
     <style>
         body {
@@ -8454,7 +8828,52 @@ def register():
         .navbar .nav-link:hover { color: #66ff66; }
         .container { max-width: 400px; margin-top: 100px; }
         .walkd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
+        .error-banner{
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 16px 0;
+            background: linear-gradient(135deg, rgba(255,71,87,0.15), rgba(255,100,196,0.12));
+            border: 1px solid rgba(255,96,126,0.6);
+            box-shadow: 0 12px 26px rgba(255, 70, 90, 0.2), inset 0 0 20px rgba(255,255,255,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+        .error-banner::after{
+            content:"";
+            position:absolute;
+            inset:-80% 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 3s ease-in-out infinite;
+            opacity: .3;
+        }
+        .error-core{
+            display:flex;
+            gap:12px;
+            align-items:flex-start;
+            position:relative;
+            z-index:1;
+        }
+        .error-icon{
+            font-size:1.4rem;
+            width:38px;
+            height:38px;
+            display:grid;
+            place-items:center;
+            border-radius:50%;
+            background: rgba(255, 75, 94, 0.25);
+            border: 1px solid rgba(255, 90, 120, 0.7);
+        }
+        .error-title{
+            font-weight:800;
+            letter-spacing:0.03em;
+            text-transform:uppercase;
+            font-size:.85rem;
+            color:#ffcad9;
+        }
+        .error-text{
+            color:#ffeef3;
+            font-size:.95rem;
+        }
         .brand {
             font-family: 'Orbitron', sans-serif;
             font-size: 2.5rem;
@@ -8465,7 +8884,14 @@ def register():
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        input, label, .btn, .error-message, a { color: #ffffff; }
+        .kicker {
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            font-weight: 800;
+            font-size: .78rem;
+            color: #9fd4ff;
+        }
+        input, label, .btn, .error-text, a { color: #ffffff; }
         input::placeholder { color: #cccccc; opacity: 0.7; }
         .btn-primary {
             background-color: #00cc00;
@@ -8477,11 +8903,79 @@ def register():
             background-color: #33ff33;
             border-color: #33ff33;
         }
+        .lottery-card{
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, rgba(7,21,33,0.9), rgba(15,26,44,0.85));
+            box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+            position: relative;
+            overflow: hidden;
+        }
+        .lottery-card::after{
+            content:"";
+            position:absolute;
+            inset:-60% 0;
+            background: radial-gradient(140px 140px at 20% 20%, rgba(110,241,255,0.4), transparent 60%);
+            opacity:.4; filter: blur(26px);
+            pointer-events:none;
+        }
+        .btn-quantum{
+            position:relative;
+            overflow:hidden;
+            border:0;
+            padding:.75rem 1.05rem;
+            font-weight:900;
+            letter-spacing:.06em;
+            text-transform:uppercase;
+            color:#04131f;
+            background: linear-gradient(120deg, #7ff0ff, #8ef2c0, #ffd1ff);
+            box-shadow: 0 10px 24px rgba(92, 240, 255, 0.25);
+            border-radius:12px;
+        }
+        .btn-quantum::before{
+            content:""; position:absolute; inset:-200% 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            transform: translateX(-60%);
+            animation: shimmer 2.8s ease-in-out infinite;
+        }
+        .btn-quantum:disabled{ opacity:.6; cursor:not-allowed; }
+        .lottery-result{
+            margin-top:.7rem;
+            padding:.6rem .8rem;
+            border-radius:10px;
+            background:#0a1624;
+            border:1px dashed rgba(255,255,255,0.2);
+            color:#b8cfe4;
+            position:relative;
+            z-index:1;
+        }
+        .lottery-code{
+            display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+            margin-top:.7rem; padding:.6rem .8rem;
+            border-radius:10px;
+            background:#071521;
+            border:1px solid rgba(120,255,220,0.3);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color:#d8f5ff;
+            position:relative;
+            z-index:1;
+        }
+        .lottery-code button{
+            border:0; padding:.35rem .65rem; border-radius:10px;
+            background:#7ff0ff;
+            color:#04131f; font-weight:800;
+        }
         a { text-decoration: none; }
         a:hover { text-decoration: underline; color: #66ff66; }
         @media (max-width: 768px) {
             .container { margin-top: 50px; }
             .brand { font-size: 2rem; }
+        }
+        @keyframes shimmer {
+            0% { transform: translateX(-60%); }
+            100% { transform: translateX(60%); }
         }
     </style>
 </head>
@@ -8507,7 +9001,16 @@ def register():
             <div class="brand">QRS</div>
             <h3 class="text-center">Register</h3>
             {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
+            <div class="error-banner" role="alert">
+                <div class="error-core">
+                    <div class="error-icon">⚠</div>
+                    <div>
+                        <div class="error-title">Signal Disrupted</div>
+                        <div class="error-text">{{ error_message }}</div>
+                        <div class="error-text" style="opacity:.8;">Keep trying — the vault rewards persistence.</div>
+                    </div>
+                </div>
+            </div>
             {% endif %}
             <form method="POST" novalidate>
                 {{ form.hidden_tag() }}
@@ -8518,7 +9021,7 @@ def register():
                 <div class="form-group">
                     {{ form.password.label }}
                     {{ form.password(class="form-control", placeholder="Choose a password") }}
-                    <small id="passwordStrength" class="form-text"></small>
+                    <small id="passwordStrength" class="form-text">8+ characters with uppercase, lowercase, and a number. Special characters optional.</small>
                 </div>
                 {% if not registration_enabled %}
                 <div class="form-group">
@@ -8528,6 +9031,18 @@ def register():
                 {% endif %}
                 {{ form.submit(class="btn btn-primary btn-block") }}
             </form>
+            <div class="lottery-card">
+                <div class="kicker">Invite Code Lottery</div>
+                <strong>Closed beta access draw</strong>
+                <p class="mt-2 mb-2" style="color:#b8cfe4;">Each draw is a signal pulse. Keep trying to unlock your invite shard.</p>
+                <button class="btn-quantum" id="lotteryBtn">Draw Invite Signal</button>
+                <div class="lottery-result" id="lotteryResult">The lattice awaits your first pull.</div>
+                <div class="lottery-code" id="lotteryCode" style="display:none">
+                    <span>Invite Code</span>
+                    <code id="lotteryCodeValue"></code>
+                    <button type="button" id="lotteryCopy">Copy</button>
+                </div>
+            </div>
             <p class="mt-3 text-center">Already have an account? <a href="{{ url_for('login') }}">Login here</a></p>
         </div>
     </div>
@@ -8542,11 +9057,103 @@ def register():
                 toggler.setAttribute('aria-expanded', isShown ? 'true' : 'false');
             });
         }
+
+        const btn = document.getElementById('lotteryBtn');
+        const result = document.getElementById('lotteryResult');
+        const codeWrap = document.getElementById('lotteryCode');
+        const codeValue = document.getElementById('lotteryCodeValue');
+        const copyBtn = document.getElementById('lotteryCopy');
+        const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function () {
+                const text = codeValue?.textContent || "";
+                if (text) { navigator.clipboard?.writeText(text); }
+                copyBtn.textContent = "Copied";
+                setTimeout(() => { copyBtn.textContent = "Copy"; }, 1400);
+            });
+        }
+        if (btn) {
+            btn.addEventListener('click', async function () {
+                btn.disabled = true;
+                btn.textContent = "Scanning...";
+                try {
+                    const res = await fetch('/api/invite_lottery', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': token || "" },
+                        body: JSON.stringify({})
+                    });
+                    const data = await res.json();
+                    if (result) result.textContent = data.message || "Signal returned no response.";
+                    if (data.invite_code) {
+                        codeWrap.style.display = 'flex';
+                        codeValue.textContent = data.invite_code;
+                    } else {
+                        codeWrap.style.display = 'none';
+                        codeValue.textContent = "";
+                    }
+                } catch (e) {
+                    if (result) result.textContent = "Signal lost. Try again soon.";
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Draw Invite Signal";
+                }
+            });
+        }
     });
     </script>
 </body>
 </html>
     """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+
+@app.post('/api/invite_lottery')
+def invite_lottery():
+    token = _csrf_from_request()
+    if not token:
+        return jsonify(ok=False, error="csrf_missing"), 400
+    try:
+        validate_csrf(token)
+    except ValidationError:
+        return jsonify(ok=False, error="csrf_invalid"), 400
+
+    now = time.time()
+    cooldown_seconds = 20
+    last = float(session.get("invite_lottery_last", 0.0))
+    if now - last < cooldown_seconds:
+        wait = max(1, int(cooldown_seconds - (now - last)))
+        message = f"{secrets.choice(INVITE_LOTTERY_COOLDOWN)} ({wait}s)"
+        return jsonify(ok=False, status="cooldown", message=message, wait_seconds=wait), 429
+
+    session["invite_lottery_last"] = now
+    draws = int(session.get("invite_lottery_draws", 0)) + 1
+    session["invite_lottery_draws"] = draws
+
+    if is_registration_enabled():
+        message = "Registration is currently open—no invite needed. The gate is already unlocked."
+        return jsonify(ok=True, status="open", message=message, draws=draws)
+
+    roll = secrets.randbelow(1000)
+    win = roll < 12
+    rarity = "ascendant" if roll < 3 else "rare" if roll < 12 else "trace"
+    if win:
+        invite_code = generate_secure_invite_code()
+        try:
+            with sqlite3.connect(DB_FILE) as db:
+                db.execute("INSERT INTO invite_codes (code) VALUES (?)", (invite_code,))
+                db.commit()
+        except Exception:
+            logger.exception("Invite lottery failed to persist code.")
+            return jsonify(ok=False, status="error", message="The lattice flickered. Try again soon."), 500
+        return jsonify(
+            ok=True,
+            status="win",
+            message=secrets.choice(INVITE_LOTTERY_SUCCESS),
+            invite_code=invite_code,
+            rarity=rarity,
+            draws=draws,
+        )
+
+    message = secrets.choice(INVITE_LOTTERY_LORE)
+    return jsonify(ok=True, status="miss", message=message, rarity=rarity, draws=draws)
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
@@ -8767,6 +9374,8 @@ def settings():
     <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
     <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
             integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 
 </body>
 </html>
@@ -9305,8 +9914,8 @@ def dashboard():
 
     x_dashboard_url = url_for("x_dashboard") if "x_dashboard" in app.view_functions else None
     admin_blog_backup_url = url_for("admin_blog_backup_page") if "admin_blog_backup_page" in app.view_functions else None
-    admin_local_llm_url = url_for("admin_local_llm_page") if "admin_local_llm_page" in app.view_functions else None
-    local_llm_url = url_for("local_llm") if "local_llm" in app.view_functions else None
+    admin_local_llm_url = _safe_url_for("admin_local_llm_page") if "admin_local_llm_page" in app.view_functions else None
+    local_llm_url = _safe_url_for("local_llm") if "local_llm" in app.view_functions else None
 
     return render_template_string("""
 <!DOCTYPE html>
@@ -9436,6 +10045,25 @@ def dashboard():
         .btn-custom:hover {
             background: #019a9e;
         }
+        .btn-quantum {
+            background: linear-gradient(135deg, #6d5cff, #00e5ff);
+            color: #0b0b14;
+            font-weight: 800;
+            border: none;
+            box-shadow: 0 12px 30px rgba(77, 123, 255, 0.35);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .btn-quantum:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 40px rgba(0, 229, 255, 0.35);
+            color: #0b0b14;
+        }
+        .btn-quantum-outline {
+            background: transparent;
+            border: 1px solid rgba(0, 229, 255, 0.55);
+            color: #c7f6ff;
+            font-weight: 700;
+        }
         @media (max-width: 767px) {
             .sidebar { width: 60px; }
             .sidebar a { padding: 15px 10px; text-align: center; }
@@ -9485,14 +10113,53 @@ def dashboard():
         }
         .chip-status.ok{ background: rgba(46, 204, 113, 0.14); border-color: rgba(46,204,113,0.24); }
         .chip-status.warn{ background: rgba(241, 196, 15, 0.14); border-color: rgba(241,196,15,0.24); }
+        .tab-section{ display:none; }
+        .tab-section.active{ display:block; }
+        .weather-grid{
+            display:grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap:16px;
+        }
+        .weather-card{
+            background: rgba(255,255,255,0.06);
+            border:1px solid rgba(255,255,255,0.12);
+            border-radius:16px;
+            padding:16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        .weather-card h5{ margin-bottom:12px; color:#9fe7ff; }
+        .weather-chip{
+            display:inline-flex; align-items:center; gap:8px;
+            padding:8px 12px; border-radius:999px;
+            background: rgba(255,255,255,0.08);
+            border:1px solid rgba(255,255,255,0.12);
+            font-weight:700;
+        }
+        #weatherMap{ height: 280px; border-radius: 14px; overflow: hidden; }
+        .forecast-buttons{ display:flex; flex-wrap:wrap; gap:10px; }
+        .forecast-buttons .btn{ border-radius: 999px; }
+        .radar-meta{ font-size: 0.9rem; color: #b6d6ff; }
+        .quantum-panel{
+            background: linear-gradient(145deg, rgba(33, 36, 86, 0.85), rgba(10, 11, 30, 0.95));
+            border: 1px solid rgba(109, 92, 255, 0.35);
+        }
+        .radar-idea{
+            border-left: 3px solid rgba(0, 229, 255, 0.6);
+            padding-left: 12px;
+            margin-bottom: 12px;
+        }
+        .radar-idea h6{ color: #9ff3ff; margin-bottom: 6px; }
 </style>
 </head>
 <body>
 
     <div class="sidebar">
         <div class="navbar-brand">QRS</div>
-        <a href="#" class="nav-link active" onclick="showSection('step1')">
+        <a href="#" class="nav-link active" data-tab="scanTab" onclick="showTab('scanTab')">
             <i class="fas fa-home"></i> <span>Dashboard</span>
+        </a>
+        <a href="#" class="nav-link" data-tab="weatherTab" onclick="showTab('weatherTab')">
+            <i class="fas fa-cloud-sun-rain"></i> <span>Weather</span>
         </a>
         {% if session.is_admin %}
         <a href="{{ url_for('settings') }}">
@@ -9520,6 +10187,7 @@ def dashboard():
     </div>
 
     <div class="content">
+        <div id="scanTab" class="tab-section active">
             <div class="quick-apps">
                 <div class="quick-left">
                     {% if x_dashboard_url %}
@@ -9656,6 +10324,93 @@ def dashboard():
             <p>No reports available.</p>
             {% endif %}
         </div>
+        </div>
+
+        <div id="weatherTab" class="tab-section">
+            <div class="weather-grid">
+                <div class="weather-card">
+                    <h5>Location + Radar</h5>
+                    <div class="form-group">
+                        <label for="weather_latitude">Latitude</label>
+                        <input type="text" class="form-control" id="weather_latitude" placeholder="Latitude">
+                    </div>
+                    <div class="form-group">
+                        <label for="weather_longitude">Longitude</label>
+                        <input type="text" class="form-control" id="weather_longitude" placeholder="Longitude">
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <button type="button" class="btn btn-quantum" onclick="useWeatherLocation()">
+                            <i class="fas fa-location-arrow"></i> Use Current Location
+                        </button>
+                        <button type="button" class="btn btn-quantum-outline" onclick="syncFromScan()">
+                            <i class="fas fa-route"></i> Use Scan Coordinates
+                        </button>
+                    </div>
+                    <div id="weatherMap"></div>
+                    <p class="radar-meta mt-2">
+                        Radar overlay powered by RainViewer. Map tiles load once a location is set.
+                    </p>
+                </div>
+
+                <div class="weather-card">
+                    <h5>Forecast Modes</h5>
+                    <div class="forecast-buttons mb-3">
+                        <button class="btn btn-quantum" onclick="fetchWeather('1day')">1 Day</button>
+                        <button class="btn btn-quantum" onclick="fetchWeather('10day')">10 Day</button>
+                        <button class="btn btn-quantum" onclick="fetchWeather('hourly')">Hourly</button>
+                        <button class="btn btn-quantum" onclick="fetchWeather('80day')">80 Day Quantum</button>
+                    </div>
+                    <div id="weatherSummary" class="mb-3">
+                        <div class="weather-chip">Awaiting forecast...</div>
+                    </div>
+                    <div id="weatherEntanglement" class="mb-3"></div>
+                    <button class="btn btn-quantum-outline" onclick="fetchWeatherReport()">
+                        <i class="fas fa-brain"></i> Build LLM Weather Report
+                    </button>
+                </div>
+
+                <div class="weather-card quantum-panel">
+                    <h5>Quantum Radar Lab</h5>
+                    <div class="form-group">
+                        <label for="radarFocus">Radar Focus</label>
+                        <textarea class="form-control" id="radarFocus" rows="3" placeholder="e.g., storm shear near destination, fog risk, microburst watch"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="radarMode">Radar Mode</label>
+                        <select class="form-control" id="radarMode">
+                            <option value="route">Route Stability</option>
+                            <option value="storm">Storm Dynamics</option>
+                            <option value="visibility">Visibility + Fog</option>
+                            <option value="energy">Energy Gradient</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-quantum" onclick="fetchQuantumRadar()">
+                        <i class="fas fa-satellite-dish"></i> Generate Quantum Radar Brief
+                    </button>
+                    <div id="quantumRadarOutput" class="mt-3">
+                        <p class="text-muted">Quantum radar ideas and briefing will appear here.</p>
+                    </div>
+                </div>
+
+                <div class="weather-card">
+                    <h5>Quantum Weather Report</h5>
+                    <div id="weatherReport">
+                        <p class="text-muted">Generate a report to see route-focused forecasting and hazard windows.</p>
+                    </div>
+                </div>
+
+                <div class="weather-card">
+                    <h5>Road + Route Intelligence</h5>
+                    <p>Keep road scanning active while weather evolves. The weather engine syncs with your scan inputs to
+                       augment hazard detection, visibility risk, and arrival window planning.</p>
+                    <ul>
+                        <li>Color entanglement bits tie forecast certainty to your scan session.</li>
+                        <li>Hourly precipitation + wind shifts are mapped to road hazard windows.</li>
+                        <li>Long-range (80-day) outlooks are labeled as quantum extrapolations.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="modal fade" id="reportModal" tabindex="-1" aria-labelledby="reportModalLabel" aria-hidden="true">
@@ -9698,6 +10453,16 @@ def dashboard():
 
         var currentStep = 1;
 
+        function showTab(tabId) {
+            $('.tab-section').removeClass('active');
+            $('#' + tabId).addClass('active');
+            $('.sidebar .nav-link').removeClass('active');
+            $('.sidebar .nav-link[data-tab="' + tabId + '"]').addClass('active');
+            if (tabId === 'weatherTab') {
+                initWeatherMap();
+            }
+        }
+
         function showSection(step) {
             $('.form-section').removeClass('active');
             $('#' + step).addClass('active');
@@ -9713,16 +10478,53 @@ def dashboard():
         }
 
         function getCoordinates() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(function(position) {
-                    $('#latitude').val(position.coords.latitude);
-                    $('#longitude').val(position.coords.longitude);
-                }, function(error) {
-                    alert("Error obtaining location: " + error.message);
-                });
-            } else {
+            if (!navigator.geolocation) {
                 alert("Geolocation is not supported by this browser.");
+                return;
             }
+            const opts = { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 };
+            navigator.geolocation.getCurrentPosition(function(position) {
+                $('#latitude').val(position.coords.latitude);
+                $('#longitude').val(position.coords.longitude);
+                syncWeatherInputs(position.coords.latitude, position.coords.longitude);
+            }, function(error) {
+                const message = error && error.message ? error.message : "Location permission denied.";
+                alert("Error obtaining location: " + message);
+            }, opts);
+        }
+
+        function syncWeatherInputs(lat, lon) {
+            if (lat && lon) {
+                $('#weather_latitude').val(lat);
+                $('#weather_longitude').val(lon);
+                updateWeatherMap(lat, lon);
+            }
+        }
+
+        function useWeatherLocation() {
+            if (!navigator.geolocation) {
+                alert("Geolocation is not supported by this browser.");
+                return;
+            }
+            const opts = { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 };
+            navigator.geolocation.getCurrentPosition(function(position) {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                syncWeatherInputs(lat, lon);
+            }, function(error) {
+                const message = error && error.message ? error.message : "Location permission denied.";
+                alert("Error obtaining location: " + message);
+            }, opts);
+        }
+
+        function syncFromScan() {
+            const lat = $('#latitude').val();
+            const lon = $('#longitude').val();
+            if (!lat || !lon) {
+                alert("Scan coordinates are empty.");
+                return;
+            }
+            syncWeatherInputs(lat, lon);
         }
 
         async function fetchStreetName(lat, lon) {
@@ -9751,6 +10553,7 @@ def dashboard():
                 $('#streetName').text("Fetching street name...");
                 const streetName = await fetchStreetName(lat, lon);
                 $('#streetName').text(streetName);
+                syncWeatherInputs(lat, lon);
                 showSection('step2');
             } else if(step === 2) {
                 showSection('step3');
@@ -9842,7 +10645,202 @@ def dashboard():
             $('table tbody').prepend(newRow);
         }
 
+        let weatherMap = null;
+        let weatherMarker = null;
+        let radarLayer = null;
+        let radarTimestamp = null;
+
+        function initWeatherMap() {
+            if (weatherMap) {
+                return;
+            }
+            weatherMap = L.map('weatherMap').setView([37.7749, -122.4194], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(weatherMap);
+        }
+
+        function updateWeatherMap(lat, lon) {
+            initWeatherMap();
+            const coords = [parseFloat(lat), parseFloat(lon)];
+            if (!weatherMarker) {
+                weatherMarker = L.marker(coords).addTo(weatherMap);
+            } else {
+                weatherMarker.setLatLng(coords);
+            }
+            weatherMap.setView(coords, 11);
+            loadRadarLayer();
+        }
+
+        async function loadRadarLayer() {
+            if (!weatherMap) {
+                return;
+            }
+            try {
+                const resp = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+                if (!resp.ok) {
+                    throw new Error('Radar feed unavailable');
+                }
+                const data = await resp.json();
+                const radarTimes = data?.radar?.past || [];
+                const latest = radarTimes.length ? radarTimes[radarTimes.length - 1].time : null;
+                if (!latest || latest === radarTimestamp) {
+                    return;
+                }
+                radarTimestamp = latest;
+                if (radarLayer) {
+                    weatherMap.removeLayer(radarLayer);
+                }
+                radarLayer = L.tileLayer(
+                    `https://tilecache.rainviewer.com/v2/radar/${latest}/256/{z}/{x}/{y}/2/1_1.png`,
+                    { opacity: 0.6 }
+                );
+                radarLayer.addTo(weatherMap);
+            } catch (error) {
+                console.warn('Radar overlay failed', error);
+            }
+        }
+
+        function getWeatherCoordinates() {
+            const lat = $('#weather_latitude').val() || $('#latitude').val();
+            const lon = $('#weather_longitude').val() || $('#longitude').val();
+            if (!lat || !lon) {
+                alert("Set latitude and longitude first.");
+                return null;
+            }
+            return { lat, lon };
+        }
+
+        async function fetchWeather(mode) {
+            const coords = getWeatherCoordinates();
+            if (!coords) { return; }
+            const payload = {
+                latitude: coords.lat,
+                longitude: coords.lon,
+                mode: mode
+            };
+            $('#weatherSummary').html('<div class="weather-chip">Fetching forecast...</div>');
+            try {
+                const response = await fetch('/api/weather_forecast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    $('#weatherSummary').html(`<div class="weather-chip">Error: ${err.error || 'fetch failed'}</div>`);
+                    return;
+                }
+                const data = await response.json();
+                const summary = data.summary || {};
+                const ent = data.entanglement || {};
+                const entHex = ent.hex || '#00adb5';
+                const longRange = data.long_range ? `<div class="mt-2">${data.long_range.headline || ''}</div>` : '';
+                $('#weatherSummary').html(`
+                    <div class="weather-chip">Now: ${summary.current_temp_c ?? '--'}°C · ${summary.current_weather || 'Unknown'}</div>
+                    <div class="mt-2">Today: ${summary.today_low_c ?? '--'}°C → ${summary.today_high_c ?? '--'}°C · ${summary.today_weather || 'Unknown'}</div>
+                    <div class="mt-1">Wind: ${summary.wind_speed ?? '--'} m/s (gust ${summary.wind_gusts ?? '--'})</div>
+                    ${longRange}
+                `);
+                $('#weatherEntanglement').html(`
+                    <div class="weather-chip" style="border-color:${entHex}; color:${entHex};">
+                        <span class="badge" style="background:${entHex}; width:14px; height:14px; border-radius:50%; display:inline-block;"></span>
+                        Entanglement ${ent.qid25?.code || ''}
+                    </div>
+                `);
+                syncWeatherInputs(coords.lat, coords.lon);
+            } catch (error) {
+                console.error(error);
+                $('#weatherSummary').html('<div class="weather-chip">Weather fetch failed.</div>');
+            }
+        }
+
+        async function fetchWeatherReport() {
+            const coords = getWeatherCoordinates();
+            if (!coords) { return; }
+            const destination = $('#destination').val();
+            $('#weatherReport').html('<p>Building LLM report...</p>');
+            try {
+                const response = await fetch('/api/weather_report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
+                    body: JSON.stringify({
+                        latitude: coords.lat,
+                        longitude: coords.lon,
+                        destination: destination,
+                        mode: '10day'
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    $('#weatherReport').html(`<p>Error: ${err.error || 'report failed'}</p>`);
+                    return;
+                }
+                const data = await response.json();
+                const report = data.report || {};
+                const entHex = data.entanglement?.hex || '#00adb5';
+                const windows = (report.hazard_windows || []).map(w => `<li>${w.start_day || ''}-${w.end_day || ''}: ${w.risk || ''} (${w.confidence || ''})</li>`).join('');
+                const prep = (report.prep_list || []).map(item => `<li>${item}</li>`).join('');
+                $('#weatherReport').html(`
+                    <h6 style="color:${entHex};">${report.headline || 'Quantum Weather Report'}</h6>
+                    <p><strong>Road Risk:</strong> ${report.road_risk || 'Unknown'}</p>
+                    <p>${report.route_guidance || ''}</p>
+                    ${windows ? `<p><strong>Hazard Windows</strong></p><ul>${windows}</ul>` : ''}
+                    ${prep ? `<p><strong>Prep List</strong></p><ul>${prep}</ul>` : ''}
+                `);
+            } catch (error) {
+                console.error(error);
+                $('#weatherReport').html('<p>Weather report failed.</p>');
+            }
+        }
+
+        async function fetchQuantumRadar() {
+            const coords = getWeatherCoordinates();
+            if (!coords) { return; }
+            const focus = $('#radarFocus').val();
+            const mode = $('#radarMode').val();
+            $('#quantumRadarOutput').html('<p>Generating quantum radar briefing...</p>');
+            try {
+                const response = await fetch('/api/quantum_radar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf_token },
+                    body: JSON.stringify({
+                        latitude: coords.lat,
+                        longitude: coords.lon,
+                        focus: focus,
+                        mode: mode
+                    })
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    $('#quantumRadarOutput').html(`<p>Error: ${err.error || 'radar failed'}</p>`);
+                    return;
+                }
+                const data = await response.json();
+                const briefing = data.briefing || {};
+                const ideas = (data.ideas || []).map(idea => `
+                    <div class="radar-idea">
+                        <h6>${idea.title || ''}</h6>
+                        <div>${idea.physics || ''}</div>
+                        <div><strong>Pennylane:</strong> ${idea.pennylane || ''}</div>
+                        <div><strong>RAG:</strong> ${idea.rag || ''}</div>
+                    </div>
+                `).join('');
+                $('#quantumRadarOutput').html(`
+                    <div class="weather-chip mb-2">Radar Status: ${briefing.radar_status || 'Unknown'} · ${briefing.confidence || 'Unknown'}</div>
+                    <h6>${briefing.headline || 'Quantum Radar Brief'}</h6>
+                    <p>${briefing.signal_notes || ''}</p>
+                    <div>${ideas}</div>
+                `);
+            } catch (error) {
+                console.error(error);
+                $('#quantumRadarOutput').html('<p>Quantum radar briefing failed.</p>');
+            }
+        }
+
         $(document).ready(function() {
+            showTab('scanTab');
             showSection('step1');
         });
     </script>
@@ -9968,6 +10966,320 @@ async def reverse_geocode_route():
     return jsonify({"street_name": location}), 200
 
     
+
+# =========================
+# Weather + Route Forecasting
+# =========================
+
+_OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
+_RADAR_FEED_URL = "https://api.rainviewer.com/public/weather-maps.json"
+_WEATHER_HOURLY_FIELDS = ",".join([
+    "temperature_2m",
+    "apparent_temperature",
+    "precipitation",
+    "weathercode",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+    "visibility",
+])
+_WEATHER_DAILY_FIELDS = ",".join([
+    "weathercode",
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "precipitation_sum",
+    "wind_speed_10m_max",
+    "wind_gusts_10m_max",
+    "uv_index_max",
+])
+_WEATHER_CURRENT_FIELDS = ",".join([
+    "temperature_2m",
+    "apparent_temperature",
+    "precipitation",
+    "weathercode",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+])
+
+def _weather_entanglement(user_id: int | None) -> dict:
+    uid = str(user_id) if user_id is not None else None
+    return _WEATHER_COLOR.sample(uid=uid)
+
+def _open_meteo_params(mode: str) -> dict:
+    mode = (mode or "hourly").lower()
+    if mode == "1day":
+        return {"forecast_days": 1, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+    if mode == "10day":
+        return {"forecast_days": 10, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+    if mode == "80day":
+        return {"forecast_days": 16, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+    return {"forecast_days": 2, "hourly": _WEATHER_HOURLY_FIELDS, "daily": _WEATHER_DAILY_FIELDS}
+
+async def _fetch_open_meteo_async(lat: float, lon: float, mode: str) -> dict:
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": "auto",
+        "current": _WEATHER_CURRENT_FIELDS,
+    }
+    params.update(_open_meteo_params(mode))
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(_OPEN_METEO_BASE_URL, params=params)
+        r.raise_for_status()
+        data = r.json()
+    return {
+        "source": "open-meteo",
+        "mode": mode,
+        "params": params,
+        "forecast": data,
+    }
+
+def _summarize_open_meteo(data: dict) -> dict:
+    current = data.get("current") or {}
+    daily = data.get("daily") or {}
+    daily_codes = daily.get("weathercode") or []
+    daily_max = daily.get("temperature_2m_max") or []
+    daily_min = daily.get("temperature_2m_min") or []
+    summary = {
+        "current_temp_c": current.get("temperature_2m"),
+        "current_apparent_c": current.get("apparent_temperature"),
+        "current_weather": _weather_code_label(current.get("weathercode")),
+        "wind_speed": current.get("wind_speed_10m"),
+        "wind_gusts": current.get("wind_gusts_10m"),
+        "today_high_c": daily_max[0] if daily_max else None,
+        "today_low_c": daily_min[0] if daily_min else None,
+        "today_weather": _weather_code_label(daily_codes[0] if daily_codes else None),
+    }
+    return summary
+
+def _quantum_long_range_outlook(
+    location_hint: str,
+    entanglement: dict,
+    forecast: dict,
+) -> dict:
+    daily = (forecast.get("daily") or {})
+    prompt = (
+        "You are a quantum weather synthesis engine. Use the following open-meteo daily data "
+        "to project an 80-day outlook. Provide strictly JSON with keys: "
+        "headline, trend_summary, risk_windows (list of objects with start_day, end_day, risk, confidence), "
+        "road_notes, and method. Use the entanglement color as a thematic anchor.\n\n"
+        f"Location hint: {location_hint}\n"
+        f"Entanglement: {json.dumps(entanglement)}\n"
+        f"Daily data: {json.dumps(daily)}"
+    )
+    payload = _call_llm(prompt, temperature=0.35, model=os.getenv("WEATHER_LLM_MODEL"))
+    if isinstance(payload, dict):
+        payload["source"] = "llm-quantum-extrapolation"
+        return payload
+    highs = daily.get("temperature_2m_max") or []
+    lows = daily.get("temperature_2m_min") or []
+    precip = daily.get("precipitation_sum") or []
+    avg_high = round(sum(highs) / max(1, len(highs)), 1) if highs else None
+    avg_low = round(sum(lows) / max(1, len(lows)), 1) if lows else None
+    avg_precip = round(sum(precip) / max(1, len(precip)), 1) if precip else None
+    return {
+        "source": "heuristic-extrapolation",
+        "headline": "Long-range outlook derived from recent 16-day trends",
+        "trend_summary": f"Average highs {avg_high}°C, lows {avg_low}°C with precipitation avg {avg_precip}mm.",
+        "risk_windows": [],
+        "road_notes": "Use this 80-day view as a directional signal only; refine with daily updates.",
+        "method": "Heuristic projection from open-meteo daily series.",
+    }
+
+def _quantum_radar_ideas(entanglement: dict, summary: dict) -> list[dict]:
+    return [
+        {
+            "title": "RGB Qubit Prism Lattice",
+            "physics": "Encode radar returns into RGB colorbits and apply entangled phase shifts for micro-front detection.",
+            "pennylane": "Use 3-qubit variational color mixer with shared phase gates.",
+            "rag": "Ground each sweep with forecast summaries to constrain noise.",
+        },
+        {
+            "title": "Hue Interference Waveguide",
+            "physics": "Treat hue shifts as interference fringes; track storm shear by phase drift.",
+            "pennylane": "Phase kickback circuit with trainable interference offsets.",
+            "rag": "Align waveguide tuning to Open-Meteo wind gust bands.",
+        },
+        {
+            "title": "Chroma Collapse Scanner",
+            "physics": "Collapse chroma in high-entropy radar cells to expose hail cores.",
+            "pennylane": "Amplitude damping channel per colorbit to simulate collapse.",
+            "rag": "Cross-check with precipitation totals and visibility drops.",
+        },
+        {
+            "title": "Spectral Entanglement Drift",
+            "physics": "Bind RGB entanglement to temperature gradients to predict fog bands.",
+            "pennylane": "Entangled Bell pairs mapped to thermal gradient encodings.",
+            "rag": "Use daily min/max swings as drift constraints.",
+        },
+        {
+            "title": "Quantum Radar Memory Weave",
+            "physics": "Persist a memory of radar echoes to reduce false positives in road hazard scans.",
+            "pennylane": "Recurrent quantum circuit with shared RGB ancilla.",
+            "rag": "Anchor memory to the most recent forecast summary.",
+        },
+    ]
+
+@app.route("/api/weather_forecast", methods=["POST"])
+async def weather_forecast_route():
+    if "username" not in session:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    mode = bleach.clean(str(data.get("mode") or "hourly"), strip=True).lower()
+    try:
+        lat_f = parse_safe_float(lat)
+        lon_f = parse_safe_float(lon)
+    except Exception:
+        return jsonify({"error": "Invalid latitude or longitude"}), 400
+    username = session.get("username", "")
+    user_id = get_user_id(username) if username else None
+    try:
+        payload = await _fetch_open_meteo_async(lat_f, lon_f, mode)
+    except Exception as exc:
+        logger.exception("open-meteo fetch failed")
+        return jsonify({"error": f"Weather fetch failed: {exc}"}), 502
+    entanglement = _weather_entanglement(user_id)
+    summary = _summarize_open_meteo(payload["forecast"])
+    outlook = None
+    if mode == "80day":
+        outlook = _quantum_long_range_outlook(
+            location_hint=f"lat {lat_f}, lon {lon_f}",
+            entanglement=entanglement,
+            forecast=payload["forecast"],
+        )
+    return jsonify({
+        "mode": mode,
+        "source": payload["source"],
+        "forecast": payload["forecast"],
+        "summary": summary,
+        "entanglement": entanglement,
+        "long_range": outlook,
+        "radar_source": "rainviewer",
+    })
+
+@app.route("/api/weather_report", methods=["POST"])
+async def weather_report_route():
+    if "username" not in session:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    mode = bleach.clean(str(data.get("mode") or "10day"), strip=True).lower()
+    destination = bleach.clean(str(data.get("destination", "")), strip=True)
+    destination = clean_text(destination, 240)
+    try:
+        lat_f = parse_safe_float(lat)
+        lon_f = parse_safe_float(lon)
+    except Exception:
+        return jsonify({"error": "Invalid latitude or longitude"}), 400
+    is_allowed, analysis = await weather_phf_filter_input(
+        f"destination={destination}; mode={mode}"
+    )
+    if not is_allowed:
+        return jsonify({
+            "error": "Input contains disallowed content.",
+            "details": analysis,
+        }), 400
+    username = session.get("username", "")
+    user_id = get_user_id(username) if username else None
+    try:
+        payload = await _fetch_open_meteo_async(lat_f, lon_f, mode)
+    except Exception as exc:
+        logger.exception("open-meteo fetch failed")
+        return jsonify({"error": f"Weather fetch failed: {exc}"}), 502
+    entanglement = _weather_entanglement(user_id)
+    summary = _summarize_open_meteo(payload["forecast"])
+    prompt = (
+        "Create a weather+route report for a road scanning dashboard. "
+        "Use the open-meteo forecast and current conditions. Provide STRICT JSON with keys: "
+        "headline, road_risk, route_guidance, hazard_windows, prep_list, and entanglement_bits. "
+        "Focus on practical driving insights, weather radar signals, and confidence levels.\n\n"
+        f"Destination: {destination or 'unknown'}\n"
+        f"Entanglement: {json.dumps(entanglement)}\n"
+        f"Summary: {json.dumps(summary)}\n"
+        f"Forecast: {json.dumps(payload['forecast'].get('daily') or {})}"
+    )
+    report = _call_llm(prompt, temperature=0.25, model=os.getenv("WEATHER_LLM_MODEL"))
+    if not isinstance(report, dict):
+        report = {
+            "headline": "Weather synthesis ready",
+            "road_risk": "Moderate: watch for precipitation and wind shifts.",
+            "route_guidance": "Use hourly updates to refine departure windows.",
+            "hazard_windows": [],
+            "prep_list": ["Check tires and visibility gear", "Plan alternates if rain bands persist"],
+            "entanglement_bits": entanglement,
+        }
+    return jsonify({
+        "mode": mode,
+        "source": payload["source"],
+        "summary": summary,
+        "entanglement": entanglement,
+        "report": report,
+        "radar_source": "rainviewer",
+    })
+
+@app.route("/api/quantum_radar", methods=["POST"])
+async def quantum_radar_route():
+    if "username" not in session:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    focus = bleach.clean(str(data.get("focus") or ""), strip=True)
+    mode = bleach.clean(str(data.get("mode") or "route"), strip=True).lower()
+    focus = clean_text(focus, 260)
+    try:
+        lat_f = parse_safe_float(lat)
+        lon_f = parse_safe_float(lon)
+    except Exception:
+        return jsonify({"error": "Invalid latitude or longitude"}), 400
+    is_allowed, analysis = await weather_phf_filter_input(
+        f"focus={focus}; mode={mode}"
+    )
+    if not is_allowed:
+        return jsonify({
+            "error": "Input contains disallowed content.",
+            "details": analysis,
+        }), 400
+    username = session.get("username", "")
+    user_id = get_user_id(username) if username else None
+    try:
+        payload = await _fetch_open_meteo_async(lat_f, lon_f, "10day")
+    except Exception as exc:
+        logger.exception("open-meteo fetch failed")
+        return jsonify({"error": f"Weather fetch failed: {exc}"}), 502
+    entanglement = _weather_entanglement(user_id)
+    summary = _summarize_open_meteo(payload["forecast"])
+    ideas = _quantum_radar_ideas(entanglement, summary)
+    prompt = (
+        "Generate a quantum radar briefing for a road scanner. Output STRICT JSON "
+        "with keys: headline, radar_status, confidence, signal_notes, and colorbit_plan. "
+        "Use the provided entanglement and forecast summary for grounding.\n\n"
+        f"Focus: {focus or 'general'}\n"
+        f"Mode: {mode}\n"
+        f"Entanglement: {json.dumps(entanglement)}\n"
+        f"Summary: {json.dumps(summary)}\n"
+        f"Ideas: {json.dumps(ideas)}"
+    )
+    briefing = _call_llm(prompt, temperature=0.2, model=os.getenv("WEATHER_LLM_MODEL"))
+    if not isinstance(briefing, dict):
+        briefing = {
+            "headline": "Quantum radar briefing ready",
+            "radar_status": "Stable",
+            "confidence": "Moderate",
+            "signal_notes": "Monitor wind gust spikes and precipitation bands.",
+            "colorbit_plan": entanglement,
+        }
+    return jsonify({
+        "focus": focus,
+        "mode": mode,
+        "summary": summary,
+        "entanglement": entanglement,
+        "ideas": ideas,
+        "briefing": briefing,
+        "radar_source": _RADAR_FEED_URL,
+    })
 
 
 # =========================
@@ -10113,6 +11425,9 @@ def _x_store_tweets(rows: list[dict]):
     try:
         con.execute("BEGIN")
         for r in rows:
+            tid = str(r.get("tid", "")).strip()
+            if not tid:
+                continue
             con.execute(
                 f"""INSERT INTO {X_DB_TABLE_TWEETS}(tid,author,created_at,text,src,inserted_at)
                     VALUES(?,?,?,?,?,?)
@@ -10122,7 +11437,7 @@ def _x_store_tweets(rows: list[dict]):
                         text=excluded.text,
                         src=excluded.src""",
                 (
-                    str(r.get("tid", ""))[:64],
+                    tid[:64],
                     str(r.get("author", ""))[:128],
                     str(r.get("created_at", ""))[:64],
                     str(r.get("text", ""))[:8000],
@@ -10229,8 +11544,15 @@ class AutonomousXRunner:
         # thread exits naturally
 
     def _in_window(self, local_dt: _dt.datetime) -> bool:
-        st = _parse_hhmm(self.window_start) or (0, 0)
-        en = _parse_hhmm(self.window_end) or (23, 59)
+        st = _parse_hhmm(self.window_start)
+        en = _parse_hhmm(self.window_end)
+        if st is None or en is None:
+            logger.warning(
+                "Invalid autonomous window config (start=%r end=%r); defaulting to always-on.",
+                self.window_start,
+                self.window_end,
+            )
+            return True
         cur = local_dt.hour * 60 + local_dt.minute
         a = st[0] * 60 + st[1]
         b = en[0] * 60 + en[1]
@@ -10242,7 +11564,13 @@ class AutonomousXRunner:
         return cur >= a or cur < b
 
     def _sleep_until_window(self, local_dt: _dt.datetime):
-        st = _parse_hhmm(self.window_start) or (0, 0)
+        st = _parse_hhmm(self.window_start)
+        if st is None:
+            logger.warning(
+                "Invalid autonomous start time %r; skipping window sleep.",
+                self.window_start,
+            )
+            return
         a = st[0] * 60 + st[1]
         cur = local_dt.hour * 60 + local_dt.minute
         if self._in_window(local_dt):
@@ -10321,6 +11649,7 @@ def x_dashboard():
     oai_model = vault_get(uid, "openai_model", X2_DEFAULT_MODEL)
     oai_key = vault_get(uid, "openai_key", "")
     is_admin = False
+    x_test_mode = bool(os.getenv("RGN_X_TEST_API"))
     try:
         _require_admin()
         is_admin = True
@@ -10427,6 +11756,7 @@ def x_dashboard():
       background: rgba(255,255,255,.04);
       color: var(--muted); font-size:13px;
     }
+    .status.warn{border-color: rgba(251,191,36,.45); color:#fbbf24;}
     .tweet{
       padding:14px 16px;
     }
@@ -10464,6 +11794,7 @@ def x_dashboard():
         <span class="pill">X user: <span class="kbd">{{ x_user or "—" }}</span></span>
         <span class="pill">bearer: <span class="kbd">{{ x_bearer_mask or "—" }}</span></span>
         <span class="pill">OpenAI: <span class="kbd">{{ oai_model }}</span></span>
+        <span class="pill">Test feed: <span class="kbd">{{ "on" if x_test_mode else "off" }}</span></span>
         {% if is_admin %}<a class="btn" href="/x/admin">Admin</a>{% endif %}
       </div>
     </div>
@@ -10502,7 +11833,10 @@ def x_dashboard():
             <input id="xBearer" placeholder="X bearer token" value="{{ x_bearer_mask }}" />
             <input id="oaiKey" placeholder="OpenAI API key" value="{{ oai_key_mask }}" />
             <input id="oaiModel" placeholder="OpenAI model" value="{{ oai_model }}" />
-            <button class="btn" id="btnSave">Save settings</button>
+            <div class="row">
+              <button class="btn" id="btnSave">Save settings</button>
+              <button class="btn danger" id="btnClearSecrets">Clear secrets</button>
+            </div>
             <div class="small">Tip: paste full secrets; they’ll be stored encrypted. This page only shows masked values.</div>
           </div>
 
@@ -10518,6 +11852,23 @@ def x_dashboard():
           <div class="bars" id="bars"></div>
           <div class="hr"></div>
           <div class="small" id="summary"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>X Feed Next Ideas</h3>
+        <div class="body">
+          <div class="small">
+            <ol style="padding-left:18px; margin:0;">
+              <li><strong>Route pulse matching:</strong> boost tweets that mention the active route corridor or waypoints.</li>
+              <li><strong>Hazard authority weighting:</strong> score posts higher when they cite DOT, weather, or responder sources.</li>
+              <li><strong>Signal decay lanes:</strong> auto-archive items as they age, with a recency shelf for live alerts.</li>
+              <li><strong>Driver calm mode:</strong> soften language + color for high stress windows to reduce panic.</li>
+            </ol>
+          </div>
+          <div class="hr"></div>
+          <div class="small">
+            Set <span class="kbd">RGN_X_TEST_API=synthetic</span> or a test URL to inject synthetic feed data for validation.
+          </div>
         </div>
       </div>
     </div>
@@ -10543,7 +11894,10 @@ def x_dashboard():
   let timeboxActive = false;
   let timeboxTick = null;
 
-  function setStatus(s){ elStatus.textContent = s; }
+  function setStatus(s, level){
+    elStatus.textContent = s;
+    elStatus.classList.toggle('warn', level === 'warn');
+  }
 
   function barLine(name, v){
     const pct = Math.max(0, Math.min(1, v||0)) * 100;
@@ -10699,8 +12053,21 @@ def x_dashboard():
       };
       setStatus('Saving…');
       const j = await jpost('/x/api/settings', body);
-      setStatus('Saved. (Refresh page to see masked values updated)');
-    }catch(e){ setStatus('Save error: '+e.message); }
+      if (j && Array.isArray(j.updated) && j.updated.length === 0) {
+        setStatus('Saved. (No changes detected — masked secrets were ignored)', 'warn');
+      } else {
+        setStatus('Saved. (Refresh page to see masked values updated)');
+      }
+    }catch(e){ setStatus('Save error: '+e.message, 'warn'); }
+  };
+
+  document.getElementById('btnClearSecrets').onclick = async ()=>{
+    if(!confirm('Clear stored X bearer + OpenAI key for this account?')) return;
+    try{
+      setStatus('Clearing secrets…');
+      await jpost('/x/api/settings/clear', { keys: ['x_bearer', 'openai_key'] });
+      setStatus('Secrets cleared. Refresh to see blank fields.');
+    }catch(e){ setStatus('Clear error: '+e.message, 'warn'); }
   };
 })();
 </script>
@@ -10714,22 +12081,21 @@ def x_dashboard():
         oai_model=oai_model or X2_DEFAULT_MODEL,
         oai_key_mask=_mask_secret(oai_key),
         is_admin=is_admin,
+        x_test_mode=x_test_mode,
     )
 
 @app.route("/x/api/settings", methods=["POST"])
 def x_api_settings():
     # Require logged-in user + CSRF for this state-changing route
-    _user_csrf_guard()
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
     uid = _require_user_id_or_abort()
 
     # Enforce JSON content-type (best-effort; still allow if client forgot but sent JSON)
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
-
-    def _is_masked(s: str) -> bool:
-        return ("••••••" in s) or (s.strip() in {"", "—"})
-
 
     # ---- sanitize / validate inputs ----
     x_user_id = clean_text(str(data.get("x_user_id") or ""), 128)
@@ -10752,14 +12118,14 @@ def x_api_settings():
         vault_set(uid, "x_user_id", x_user_id)
         wrote.append("x_user_id")
 
-    if x_bearer and not _is_masked(x_bearer):
+    if x_bearer and not _is_masked_secret(x_bearer):
         # do NOT bleach/tokenize; store raw secret, but length-cap to avoid abuse
         if len(x_bearer) > 6000:
             return jsonify({"ok": False, "error": "x_bearer too long"}), 400
         vault_set(uid, "x_bearer", x_bearer)
         wrote.append("x_bearer")
 
-    if oai_key and not _is_masked(oai_key):
+    if oai_key and not _is_masked_secret(oai_key):
         if len(oai_key) > 6000:
             return jsonify({"ok": False, "error": "openai_key too long"}), 400
         vault_set(uid, "openai_key", oai_key)
@@ -10771,11 +12137,31 @@ def x_api_settings():
 
     # Optional: return which fields updated (no secrets echoed)
     return jsonify({"ok": True, "updated": wrote})
+
+@app.route("/x/api/settings/clear", methods=["POST"])
+def x_api_settings_clear():
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
+    uid = _require_user_id_or_abort()
+    data = request.get_json(silent=True) or {}
+    keys = data.get("keys") if isinstance(data, dict) else []
+    if not isinstance(keys, list):
+        return jsonify({"ok": False, "error": "keys must be a list"}), 400
+    allowed = {"x_bearer", "openai_key"}
+    cleared = []
+    for key in keys:
+        if key in allowed:
+            vault_set(uid, key, "")
+            cleared.append(key)
+    return jsonify({"ok": True, "cleared": cleared})
     
 @app.route("/x/api/fetch", methods=["POST"])
 def x_api_fetch():
     # Require logged-in user + CSRF for this state-changing route
-    _user_csrf_guard()
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
     uid = _require_user_id_or_abort()
 
     bearer = vault_get(uid, "x_bearer", "") or ""
@@ -10785,7 +12171,7 @@ def x_api_fetch():
     bearer = clean_text(bearer, 4096)
     x_user_id = clean_text(x_user_id, 128)
 
-    if (not bearer) or ("••••••" in bearer) or (not x_user_id) or ("••••••" in x_user_id):
+    if (not bearer) or _is_masked_secret(bearer) or (not x_user_id) or _is_masked_secret(x_user_id):
         return jsonify({"ok": False, "error": "Missing X settings: x_bearer + x_user_id"}), 400
 
     # Clamp max_results to safe bounds
@@ -10797,7 +12183,7 @@ def x_api_fetch():
         max_results = 90
 
     try:
-        payload = x2_fetch_user_tweets(bearer=bearer, user_id=x_user_id, max_results=max_results)
+        payload = _x2_fetch_payload_from_env(bearer=bearer, x_user_id=x_user_id, max_results=max_results)
 
         # Parse + sanitize before storing
         rows = x2_parse_tweets(payload, src="user") or []
@@ -10848,7 +12234,9 @@ def x_api_fetch():
 
 @app.route("/x/api/carousel", methods=["POST"])
 def x_api_carousel():
-    _user_csrf_guard()
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
     uid = _require_user_id_or_abort()
 
     data = request.get_json(silent=True) or {}
@@ -10865,14 +12253,16 @@ def x_api_carousel():
 @app.route("/x/api/label", methods=["POST"])
 def x_api_label():
     # Require logged-in user + CSRF for this state-changing route
-    _user_csrf_guard()
+    csrf_fail = _user_csrf_guard()
+    if csrf_fail:
+        return csrf_fail
     uid = _require_user_id_or_abort()
 
     # Read vault secrets/settings (masked values should never be stored here)
     api_key = vault_get(uid, "openai_key", "") or ""
     model = clean_text(vault_get(uid, "openai_model", X2_DEFAULT_MODEL) or X2_DEFAULT_MODEL, 128) or X2_DEFAULT_MODEL
 
-    if not api_key or "••••••" in api_key:
+    if not api_key or _is_masked_secret(api_key):
         return jsonify({"ok": False, "error": "Missing OpenAI key in vault"}), 400
 
     # Clamp batch size to avoid abuse
@@ -11142,7 +12532,9 @@ def _restore_legacy_endpoints():
 
     if "api_prefs_set" not in globals():
         def api_prefs_set():  # type: ignore[no-redef]
-            _user_csrf_guard()
+            csrf_fail = _user_csrf_guard()
+            if csrf_fail:
+                return csrf_fail
             uid = _require_user_id_or_abort()
             data = request.get_json(silent=True) or {}
             if not isinstance(data, dict):
